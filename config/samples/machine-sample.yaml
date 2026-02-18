@@ -1,0 +1,47 @@
+apiVersion: machine.openshift.io/v1beta1
+kind: Machine
+metadata:
+  name: worker-nvidia-carbide-sample
+  namespace: openshift-machine-api
+  labels:
+    machine.openshift.io/cluster-api-cluster: my-cluster
+    machine.openshift.io/cluster-api-machine-role: worker
+    machine.openshift.io/cluster-api-machine-type: worker
+spec:
+  providerSpec:
+    value:
+      apiVersion: nvidiacarbideprovider.infrastructure.cluster.x-k8s.io/v1beta1
+      kind: NvidiaCarbideMachineProviderSpec
+
+      # NVIDIA Carbide Site and Tenant (replace with your actual UUIDs)
+      siteId: "550e8400-e29b-41d4-a716-446655440000"
+      tenantId: "660e8400-e29b-41d4-a716-446655440001"
+
+      # Network Configuration (replace with your actual UUIDs)
+      vpcId: "770e8400-e29b-41d4-a716-446655440002"
+      subnetId: "880e8400-e29b-41d4-a716-446655440003"
+
+      # Instance Type (replace with your actual instance type UUID)
+      instanceTypeId: "990e8400-e29b-41d4-a716-446655440004"
+
+      # Optional: SSH Key Groups
+      # sshKeyGroupIds:
+      #   - "bb0e8400-e29b-41d4-a716-446655440006"
+
+      # Optional: Labels for the instance
+      labels:
+        environment: development
+        role: worker
+
+      # Optional: Cloud-init user data
+      # userData: |
+      #   #cloud-config
+      #   users:
+      #     - name: core
+      #       ssh_authorized_keys:
+      #         - ssh-rsa AAAAB3NzaC1yc2E...
+
+      # Credentials Secret
+      credentialsSecret:
+        name: nvidia-carbide-credentials
+        namespace: openshift-machine-api

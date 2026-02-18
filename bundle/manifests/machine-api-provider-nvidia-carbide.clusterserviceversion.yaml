@@ -1,0 +1,194 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+  name: machine-api-provider-nvidia-carbide.v0.1.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned: []
+  description: |
+    OpenShift Machine API actuator for provisioning bare-metal machines on
+    NVIDIA Carbide platform.
+
+    This provider implements the OpenShift Machine API actuator interface,
+    enabling:
+
+    - **Declarative machine provisioning** via Machine CRDs
+    - **Automated scaling** via MachineSet controllers
+    - **Integration with OpenShift cluster lifecycle** and machine management
+
+    The provider translates OpenShift Machine API requests into NVIDIA Carbide
+    REST API calls, managing the full lifecycle of bare-metal instances.
+  displayName: Machine API Provider NVIDIA Carbide
+  icon:
+    - base64data: ""
+      mediatype: image/svg+xml
+  install:
+    spec:
+      clusterPermissions:
+        - rules:
+            - apiGroups:
+                - ""
+              resources:
+                - secrets
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - ""
+              resources:
+                - events
+              verbs:
+                - create
+                - patch
+            - apiGroups:
+                - machine.openshift.io
+              resources:
+                - machines
+              verbs:
+                - get
+                - list
+                - watch
+                - update
+                - patch
+            - apiGroups:
+                - machine.openshift.io
+              resources:
+                - machines/status
+              verbs:
+                - get
+                - update
+                - patch
+            - apiGroups:
+                - machine.openshift.io
+              resources:
+                - machines/finalizers
+              verbs:
+                - update
+            - apiGroups:
+                - machine.openshift.io
+              resources:
+                - machinesets
+              verbs:
+                - get
+                - list
+                - watch
+          serviceAccountName: machine-api-provider-nvidia-carbide
+      deployments:
+        - label:
+            app: machine-api-provider-nvidia-carbide
+          name: machine-api-provider-nvidia-carbide
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: machine-api-provider-nvidia-carbide
+            template:
+              metadata:
+                labels:
+                  app: machine-api-provider-nvidia-carbide
+              spec:
+                containers:
+                  - args:
+                      - --leader-elect
+                      - --health-probe-bind-address=:8081
+                      - --metrics-bind-address=:8080
+                    command:
+                      - /manager
+                    image: ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide:v0.1.0
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: 8081
+                      initialDelaySeconds: 15
+                      periodSeconds: 20
+                    name: manager
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: 8081
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                    resources:
+                      limits:
+                        cpu: 500m
+                        memory: 128Mi
+                      requests:
+                        cpu: 10m
+                        memory: 64Mi
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop:
+                          - ALL
+                      readOnlyRootFilesystem: true
+                securityContext:
+                  runAsNonRoot: true
+                  seccompProfile:
+                    type: RuntimeDefault
+                serviceAccountName: machine-api-provider-nvidia-carbide
+                terminationGracePeriodSeconds: 10
+      permissions:
+        - rules:
+            - apiGroups:
+                - ""
+              resources:
+                - configmaps
+              verbs:
+                - get
+                - list
+                - watch
+                - create
+                - update
+                - patch
+                - delete
+            - apiGroups:
+                - coordination.k8s.io
+              resources:
+                - leases
+              verbs:
+                - get
+                - list
+                - watch
+                - create
+                - update
+                - patch
+                - delete
+            - apiGroups:
+                - ""
+              resources:
+                - events
+              verbs:
+                - create
+                - patch
+          serviceAccountName: machine-api-provider-nvidia-carbide
+    strategy: deployment
+  installModes:
+    - supported: true
+      type: OwnNamespace
+    - supported: true
+      type: SingleNamespace
+    - supported: false
+      type: MultiNamespace
+    - supported: true
+      type: AllNamespaces
+  keywords:
+    - machine-api
+    - nvidia
+    - carbide
+    - bare-metal
+    - openshift
+  links:
+    - name: Source Code
+      url: https://github.com/fabiendupont/machine-api-provider-nvidia-carbide
+  maintainers:
+    - email: fdupont@nvidia.com
+      name: Fabien Dupont
+  maturity: alpha
+  provider:
+    name: NVIDIA
+  version: 0.1.0
