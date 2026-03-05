@@ -46,8 +46,8 @@ const (
 	testSubnetID = "00000000-0000-0000-0000-000000000001"
 	testOrgName  = "test-org"
 
-	machineCreationTimeout = 15 * time.Minute
-	machineDeletionTimeout = 10 * time.Minute
+	machineCreationTimeout = 5 * time.Minute
+	machineDeletionTimeout = 3 * time.Minute
 	pollInterval           = 15 * time.Second
 )
 

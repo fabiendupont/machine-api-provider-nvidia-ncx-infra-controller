@@ -53,6 +53,11 @@ jobs:
           kind load docker-image localhost/machine-api-provider-nvidia-carbide:e2e \
             --name carbide-rest-local
 
+      - name: Deploy provider controller
+        run: |
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/rbac/ || true
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/manager/ || true
+
       - name: Run e2e tests
         run: make test-e2e-live
         env:
