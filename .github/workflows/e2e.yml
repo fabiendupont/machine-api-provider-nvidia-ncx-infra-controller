@@ -65,7 +65,16 @@ jobs:
             -n machine-api-provider-nvidia-carbide-system --timeout=5m
 
       - name: Run e2e tests
-        run: make test-e2e-live
+        run: |
+          make test-e2e-live || true
+          echo "=== Controller logs ==="
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl logs \
+            -l control-plane=controller-manager \
+            -n machine-api-provider-nvidia-carbide-system --tail=100
+          echo "=== Machine objects ==="
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl get machines.machine.openshift.io -A -o yaml || true
+          # Fail if tests failed
+          make test-e2e-live
         env:
           NVIDIA_CARBIDE_API_ENDPOINT: http://localhost:8388
           NVIDIA_CARBIDE_KEYCLOAK_URL: http://localhost:8082
