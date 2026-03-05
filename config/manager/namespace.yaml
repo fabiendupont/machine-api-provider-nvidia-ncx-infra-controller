@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: machine-api-provider-nvidia-carbide
+  name: machine-api-provider-nvidia-carbide-system

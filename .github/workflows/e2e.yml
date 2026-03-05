@@ -55,8 +55,14 @@ jobs:
 
       - name: Deploy provider controller
         run: |
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/rbac/ || true
-          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/manager/ || true
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/manager/namespace.yaml
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/rbac/
+          sed -i 's|ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide:latest|localhost/machine-api-provider-nvidia-carbide:e2e|' \
+            config/manager/deployment.yaml
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/manager/
+          KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl wait \
+            --for=condition=Available deployment/controller-manager \
+            -n machine-api-provider-nvidia-carbide-system --timeout=5m
 
       - name: Run e2e tests
         run: make test-e2e-live
