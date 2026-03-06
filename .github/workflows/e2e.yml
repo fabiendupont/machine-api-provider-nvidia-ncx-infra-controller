@@ -38,6 +38,8 @@ jobs:
         run: make kind-reset
         working-directory: bare-metal-manager-rest
         timeout-minutes: 20
+        env:
+          KUBECONFIG: ""
 
       - name: Verify Carbide API health
         run: |
