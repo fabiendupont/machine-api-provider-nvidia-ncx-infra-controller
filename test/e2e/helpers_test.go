@@ -160,8 +160,8 @@ func createIPBlockViaAPI(token, orgName, siteID, name string) string {
 		"siteId":          siteID,
 		"prefix":          "10.0.0.0",
 		"prefixLength":    16,
-		"protocolVersion": "ipv4",
-		"routingType":     "datacenter_only",
+		"protocolVersion": "IPv4",
+		"routingType":     "DatacenterOnly",
 	}
 	result, status := carbideAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/ipblock", orgName), token, body)
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create IP block: %v", result)
