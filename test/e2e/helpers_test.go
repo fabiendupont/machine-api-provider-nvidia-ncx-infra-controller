@@ -189,7 +189,7 @@ func createSubnetViaAPI(token, orgName, vpcID, ipBlockID, name string) string {
 
 // registerSiteInDB marks a site as Registered by updating PostgreSQL directly.
 func registerSiteInDB(siteID string) {
-	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "deploy/postgres", "--",
+	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "statefulset/postgres", "--",
 		"psql", "-U", "forge", "-d", "forge", "-c",
 		fmt.Sprintf("UPDATE sites SET status = 'Registered' WHERE id = '%s'", siteID))
 	cmd.Env = append(os.Environ(), "KUBECONFIG=/tmp/carbide-e2e-kubeconfig")
