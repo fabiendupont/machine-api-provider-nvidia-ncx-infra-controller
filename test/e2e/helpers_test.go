@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -210,6 +211,16 @@ func getExistingSiteID(token, orgName string) string {
 	return siteID
 }
 
+// ensureSiteRegistered ensures the site is in Registered state.
+func ensureSiteRegistered(siteID string) {
+	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "statefulset/postgres", "--",
+		"psql", "-U", "forge", "-d", "forge", "-c",
+		fmt.Sprintf("UPDATE site SET status = 'Registered' WHERE id = '%s' AND status != 'Registered'", siteID))
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "Failed to ensure site is registered: %s", string(output))
+	_, _ = fmt.Fprintf(GinkgoWriter, "Ensured site %s is Registered\n", siteID)
+}
+
 // setupInfrastructureViaAPI uses the existing local-dev-site and creates
 // Tenant -> IP Block -> Allocation -> VPC -> Subnet.
 // Returns siteID, tenantID, vpcID, subnetID for use in tests.
@@ -218,6 +229,7 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID,
 
 	// Use the existing site (has a connected site-agent for Temporal workflows)
 	siteID = getExistingSiteID(token, orgName)
+	ensureSiteRegistered(siteID)
 
 	// Get or create Tenant (idempotent)
 	carbideAPIRequest("POST", apiBase+"/tenant", token, map[string]interface{}{"org": orgName})
