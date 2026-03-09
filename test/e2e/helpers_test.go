@@ -263,29 +263,33 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID,
 	// Ensure instance type is Ready (the registration workflow may not have completed)
 	ensureInstanceTypeReady(instanceTypeID)
 
-	// Create Allocation with both IPBlock and InstanceType constraints
+	// Create Allocation for IPBlock (one constraint per allocation)
 	allocResult, status := carbideAPIRequest("POST", apiBase+"/allocation", token, map[string]interface{}{
-		"name":     prefix + "-allocation",
+		"name":     prefix + "-ipblock-allocation",
 		"tenantId": tenantID,
 		"siteId":   siteID,
 		"allocationConstraints": []map[string]interface{}{
 			{"resourceType": "IPBlock", "resourceTypeId": ipBlockID, "constraintType": "OnDemand", "constraintValue": 24},
+		},
+	})
+	Expect(status).To(Equal(http.StatusCreated), "Failed to create IPBlock allocation: %v", allocResult)
+
+	// Create Allocation for InstanceType
+	itAllocResult, itAllocStatus := carbideAPIRequest("POST", apiBase+"/allocation", token, map[string]interface{}{
+		"name":     prefix + "-instancetype-allocation",
+		"tenantId": tenantID,
+		"siteId":   siteID,
+		"allocationConstraints": []map[string]interface{}{
 			{"resourceType": "InstanceType", "resourceTypeId": instanceTypeID, "constraintType": "OnDemand", "constraintValue": 1},
 		},
 	})
-	Expect(status).To(Equal(http.StatusCreated), "Failed to create allocation: %v", allocResult)
+	Expect(itAllocStatus).To(Equal(http.StatusCreated), "Failed to create InstanceType allocation: %v", itAllocResult)
+	_ = itAllocResult
 
-	// Extract the child IP block ID from the allocation response
+	// Extract the child IP block ID from the IPBlock allocation response
 	constraints := allocResult["allocationConstraints"].([]interface{})
-	var childIPBlockID string
-	for _, c := range constraints {
-		constraint := c.(map[string]interface{})
-		if constraint["resourceType"] == "IPBlock" {
-			childIPBlockID = constraint["derivedResourceId"].(string)
-			break
-		}
-	}
-	Expect(childIPBlockID).NotTo(BeEmpty(), "Could not find child IP block ID in allocation response")
+	firstConstraint := constraints[0].(map[string]interface{})
+	childIPBlockID := firstConstraint["derivedResourceId"].(string)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Child IP Block ID: %s\n", childIPBlockID)
 
 	// Create VPC
