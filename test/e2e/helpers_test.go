@@ -221,6 +221,16 @@ func ensureSiteRegistered(siteID string) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "Ensured site %s is Registered\n", siteID)
 }
 
+// enableTargetedInstanceCreation enables the TargetedInstanceCreation capability on the tenant.
+func enableTargetedInstanceCreation(tenantID string) {
+	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "statefulset/postgres", "--",
+		"psql", "-U", "forge", "-d", "forge", "-c",
+		fmt.Sprintf("UPDATE tenant SET config = COALESCE(config, '{}')::jsonb || '{\"targetedInstanceCreation\": true}'::jsonb WHERE id = '%s'", tenantID))
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "Failed to enable targeted instance creation: %s", string(output))
+	_, _ = fmt.Fprintf(GinkgoWriter, "Enabled TargetedInstanceCreation for tenant %s\n", tenantID)
+}
+
 // getInfraProviderID retrieves the infrastructure provider ID for the org.
 func getInfraProviderID(token, orgName string) string {
 	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
@@ -262,6 +272,7 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID,
 	Expect(tStatus).To(Equal(http.StatusOK), "Failed to get current tenant: %v", currentTenant)
 	tenantID = currentTenant["id"].(string)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Tenant ID: %s\n", tenantID)
+
 
 	// Create IP Block
 	ipBlockID := createIPBlockViaAPI(token, orgName, siteID, prefix+"-ipblock")
