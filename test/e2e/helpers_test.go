@@ -231,6 +231,16 @@ func enableTargetedInstanceCreation(tenantID string) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "Enabled TargetedInstanceCreation for tenant %s\n", tenantID)
 }
 
+// ensureSubnetReady ensures the subnet is in Ready state.
+func ensureSubnetReady(subnetID string) {
+	cmd := exec.Command("kubectl", "exec", "-n", "postgres", "statefulset/postgres", "--",
+		"psql", "-U", "forge", "-d", "forge", "-c",
+		fmt.Sprintf("UPDATE subnet SET status = 'Ready' WHERE id = '%s' AND status != 'Ready'", subnetID))
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "Failed to ensure subnet is ready: %s", string(output))
+	_, _ = fmt.Fprintf(GinkgoWriter, "Ensured subnet %s is Ready\n", subnetID)
+}
+
 // getInfraProviderID retrieves the infrastructure provider ID for the org.
 func getInfraProviderID(token, orgName string) string {
 	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
@@ -300,6 +310,7 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID,
 
 	// Create Subnet (uses child IP block, not the parent)
 	subnetID = createSubnetViaAPI(token, orgName, vpcID, childIPBlockID, prefix+"-subnet")
+	ensureSubnetReady(subnetID)
 
 	// Create a test machine in DB (mock-core doesn't persist machines,
 	// so we insert one directly for the controller to use with machineId)
