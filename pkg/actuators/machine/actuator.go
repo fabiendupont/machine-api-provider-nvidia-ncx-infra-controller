@@ -379,14 +379,20 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 	// Delete instance
 	httpResp, err := nvidiaCarbideClient.DeleteInstance(ctx, orgName, *providerStatus.InstanceID)
 	if err != nil {
-		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedDelete", "Failed to delete instance: %v", err)
+		// Treat 404 as success (instance already deleted)
+		if httpResp != nil && httpResp.StatusCode == 404 {
+			if a.eventRecorder != nil {
+				a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "Deleted",
+					"Instance %s already deleted (404)", *providerStatus.InstanceID)
+			}
+		} else {
+			if a.eventRecorder != nil {
+				a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedDelete", "Failed to delete instance: %v", err)
+			}
+			return fmt.Errorf("failed to delete instance: %w", err)
 		}
-		return fmt.Errorf("failed to delete instance: %w", err)
-	}
-
-	// Check response
-	if httpResp.StatusCode != 204 && httpResp.StatusCode != 404 {
+	} else if httpResp.StatusCode != 200 && httpResp.StatusCode != 202 && httpResp.StatusCode != 204 && httpResp.StatusCode != 404 {
+		// Accept 200 (OK), 202 (Accepted/async), 204 (No Content), 404 (already gone)
 		if a.eventRecorder != nil {
 			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedDelete",
 				"Delete instance returned unexpected status: %d", httpResp.StatusCode)
