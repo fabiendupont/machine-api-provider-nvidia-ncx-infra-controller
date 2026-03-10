@@ -75,12 +75,13 @@ jobs:
             -n machine-api-provider-nvidia-carbide-system --timeout=5m
 
       - name: Run e2e tests
+        run: make test-e2e-live
+
+      - name: Dump controller logs on failure
+        if: failure()
         run: |
-          make test-e2e-live || true
           echo "=== Controller logs ==="
           kubectl logs -l control-plane=controller-manager \
-            -n machine-api-provider-nvidia-carbide-system --tail=100
+            -n machine-api-provider-nvidia-carbide-system --tail=200
           echo "=== Machine objects ==="
           kubectl get machines.machine.openshift.io -A -o yaml || true
-          # Fail if tests failed
-          make test-e2e-live
