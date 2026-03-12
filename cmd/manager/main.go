@@ -57,7 +57,7 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 
 	opts := zap.Options{
-		Development: true,
+		Development: false,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -90,15 +90,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup MachineSet reconciler (optional - can be enabled later)
-	// Uncomment the following lines to enable MachineSet controller:
-	// if err = (&machinecontroller.MachineSetReconciler{
-	// 	Client: mgr.GetClient(),
-	// 	Scheme: mgr.GetScheme(),
-	// }).SetupWithManager(mgr); err != nil {
-	// 	setupLog.Error(err, "unable to create controller", "controller", "MachineSet")
-	// 	os.Exit(1)
-	// }
+	// MachineSet reconciliation is handled by the machine-api-operator.
+	// This provider only needs to implement the Machine actuator interface.
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

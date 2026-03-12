@@ -59,6 +59,23 @@ type NvidiaCarbideMachineProviderSpec struct {
 	// +optional
 	AdditionalSubnetIDs []AdditionalSubnet `json:"additionalSubnetIds,omitempty"`
 
+	// OperatingSystemID is the Carbide operating system to install.
+	// If empty, a minimal iPXE script is used as fallback.
+	// +optional
+	OperatingSystemID string `json:"operatingSystemId,omitempty"`
+
+	// InfiniBandInterfaces specifies InfiniBand partition attachments for HPC networking.
+	// +optional
+	InfiniBandInterfaces []InfiniBandInterfaceSpec `json:"infiniBandInterfaces,omitempty"`
+
+	// NVLinkInterfaces specifies NVLink logical partition attachments for GPU communication.
+	// +optional
+	NVLinkInterfaces []NVLinkInterfaceSpec `json:"nvLinkInterfaces,omitempty"`
+
+	// NetworkSecurityGroupID attaches a network security group to the instance.
+	// +optional
+	NetworkSecurityGroupID string `json:"networkSecurityGroupId,omitempty"`
+
 	// UserData contains the cloud-init user data
 	// +optional
 	UserData string `json:"userData,omitempty"`
@@ -133,4 +150,34 @@ type MachineAddress struct {
 	// Address is the IP address
 	// +required
 	Address string `json:"address"`
+}
+
+// InfiniBandInterfaceSpec defines an InfiniBand interface attachment
+type InfiniBandInterfaceSpec struct {
+	// PartitionID is the InfiniBand partition UUID
+	// +optional
+	PartitionID string `json:"partitionId,omitempty"`
+
+	// Device is the device name
+	// +optional
+	Device string `json:"device,omitempty"`
+
+	// IsPhysical indicates if this is a physical interface
+	// +optional
+	IsPhysical bool `json:"isPhysical,omitempty"`
+
+	// DeviceInstance is the device index
+	// +optional
+	DeviceInstance *int32 `json:"deviceInstance,omitempty"`
+}
+
+// NVLinkInterfaceSpec defines an NVLink interface attachment
+type NVLinkInterfaceSpec struct {
+	// NVLinkLogicalPartitionID is the NVLink logical partition UUID
+	// +optional
+	NVLinkLogicalPartitionID string `json:"nvLinkLogicalPartitionId,omitempty"`
+
+	// DeviceInstance is the device index
+	// +optional
+	DeviceInstance *int32 `json:"deviceInstance,omitempty"`
 }

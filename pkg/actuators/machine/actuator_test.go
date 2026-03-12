@@ -17,9 +17,14 @@ limitations under the License.
 package machine
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
+	machinev1beta1 "github.com/openshift/api/machine/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -30,72 +35,99 @@ import (
 
 	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
 	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/providerid"
+	bmm "github.com/nvidia/bare-metal-manager-rest/sdk/standard"
 )
 
-func TestActuator_Create(t *testing.T) {
-	tests := []struct {
-		name    string
-		machine *unstructured.Unstructured
-		wantErr bool
-	}{
-		{
-			name: "successful instance creation",
-			machine: createTestMachine(v1beta1.NvidiaCarbideMachineProviderSpec{
-				SiteID:   "550e8400-e29b-41d4-a716-446655440000",
-				TenantID: "660e8400-e29b-41d4-a716-446655440001",
-				VpcID:    "770e8400-e29b-41d4-a716-446655440002",
-				SubnetID: "880e8400-e29b-41d4-a716-446655440003",
-				CredentialsSecret: v1beta1.CredentialsSecretReference{
-					Name:      "nvidia-carbide-creds",
-					Namespace: "default",
-				},
-			}),
-			wantErr: false,
+// mockCarbideClient implements NvidiaCarbideClientInterface for testing
+type mockCarbideClient struct {
+	createInstance func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error)
+	getInstance    func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error)
+	deleteInstance func(ctx context.Context, org string, instanceId string) (*http.Response, error)
+}
+
+func (m *mockCarbideClient) CreateInstance(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
+	return m.createInstance(ctx, org, req)
+}
+
+func (m *mockCarbideClient) GetInstance(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error) {
+	return m.getInstance(ctx, org, instanceId)
+}
+
+func (m *mockCarbideClient) DeleteInstance(ctx context.Context, org string, instanceId string) (*http.Response, error) {
+	return m.deleteInstance(ctx, org, instanceId)
+}
+
+func newTestActuator(mock *mockCarbideClient) (*Actuator, *record.FakeRecorder) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = machinev1beta1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		Build()
+
+	recorder := record.NewFakeRecorder(10)
+	actuator := NewActuatorWithClient(fakeClient, recorder, mock, "test-org")
+	return actuator, recorder
+}
+
+func newTestActuatorWithMachine(mock *mockCarbideClient, machine *machinev1beta1.Machine) (*Actuator, *record.FakeRecorder) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = machinev1beta1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(machine).
+		WithStatusSubresource(machine).
+		Build()
+
+	recorder := record.NewFakeRecorder(10)
+	actuator := NewActuatorWithClient(fakeClient, recorder, mock, "test-org")
+	return actuator, recorder
+}
+
+func testInstance(id string) *bmm.Instance {
+	status := bmm.INSTANCESTATUS_PROVISIONING
+	machineId := bmm.NewNullableString(ptr("machine-123"))
+	return &bmm.Instance{
+		Id:        &id,
+		Status:    &status,
+		MachineId: *machineId,
+		Interfaces: []bmm.Interface{
+			{
+				IpAddresses: []string{"10.0.0.1"},
+			},
 		},
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			scheme := runtime.NewScheme()
-			_ = corev1.AddToScheme(scheme)
+func validProviderSpec() v1beta1.NvidiaCarbideMachineProviderSpec {
+	return v1beta1.NvidiaCarbideMachineProviderSpec{
+		SiteID:         "550e8400-e29b-41d4-a716-446655440000",
+		TenantID:       "660e8400-e29b-41d4-a716-446655440001",
+		InstanceTypeID: "990e8400-e29b-41d4-a716-446655440004",
+		VpcID:          "770e8400-e29b-41d4-a716-446655440002",
+		SubnetID:       "880e8400-e29b-41d4-a716-446655440003",
+		CredentialsSecret: v1beta1.CredentialsSecretReference{
+			Name:      "nvidia-carbide-creds",
+			Namespace: "default",
+		},
+	}
+}
 
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "nvidia-carbide-creds",
-					Namespace: "default",
-				},
-				Data: map[string][]byte{
-					"endpoint": []byte("https://api.nvidia-carbide.test"),
-					"orgName":  []byte("test-org"),
-					"token":    []byte("test-token"),
-				},
-			}
-
-			fakeClient := fake.NewClientBuilder().
-				WithScheme(scheme).
-				WithObjects(secret).
-				Build()
-
-			actuator := NewActuator(
-				fakeClient,
-				record.NewFakeRecorder(10),
-			)
-
-			// NOTE: This test currently cannot run end-to-end because:
-			// 1. The getNvidiaCarbideClient() needs network access
-			// 2. We don't have a mock client injector yet
-			//
-			// Future improvement: Add dependency injection for NVIDIA Carbide client
-			// to enable full unit testing without network calls
-
-			_ = actuator
-			_ = tt.machine
-
-			// err := actuator.Create(context.Background(), tt.machine)
-			// if (err != nil) != tt.wantErr {
-			// 	t.Errorf("Create() error = %v, wantErr %v", err, tt.wantErr)
-			// }
-		})
+func createTypedTestMachine(providerSpec v1beta1.NvidiaCarbideMachineProviderSpec) *machinev1beta1.Machine {
+	specBytes, _ := json.Marshal(providerSpec)
+	return &machinev1beta1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-machine",
+			Namespace: "default",
+		},
+		Spec: machinev1beta1.MachineSpec{
+			ProviderSpec: machinev1beta1.ProviderSpec{
+				Value: &runtime.RawExtension{Raw: specBytes},
+			},
+		},
 	}
 }
 
@@ -109,11 +141,320 @@ func createTestMachine(providerSpec v1beta1.NvidiaCarbideMachineProviderSpec) *u
 	machine.SetName("test-machine")
 	machine.SetNamespace("default")
 
-	// Embed provider spec
 	providerSpecMap, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(&providerSpec)
 	_ = unstructured.SetNestedField(machine.Object, providerSpecMap, "spec", "providerSpec", "value")
 
 	return machine
+}
+
+func createTestMachineWithStatus(
+	providerSpec v1beta1.NvidiaCarbideMachineProviderSpec,
+	providerStatus v1beta1.NvidiaCarbideMachineProviderStatus,
+) *unstructured.Unstructured {
+	machine := createTestMachine(providerSpec)
+
+	statusMap, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(&providerStatus)
+	_ = unstructured.SetNestedField(machine.Object, statusMap, "status", "providerStatus")
+
+	return machine
+}
+
+func TestCreate_Success(t *testing.T) {
+	instanceID := uuid.New().String()
+	mock := &mockCarbideClient{
+		createInstance: func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+	}
+
+	machine := createTypedTestMachine(validProviderSpec())
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+}
+
+func TestCreate_APIError(t *testing.T) {
+	mock := &mockCarbideClient{
+		createInstance: func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
+			return nil, nil, fmt.Errorf("connection refused")
+		},
+	}
+
+	actuator, _ := newTestActuator(mock)
+	machine := createTestMachine(validProviderSpec())
+
+	err := actuator.Create(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Create() expected error, got nil")
+	}
+}
+
+func TestCreate_InvalidSpec(t *testing.T) {
+	createCalled := false
+	mock := &mockCarbideClient{
+		createInstance: func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
+			createCalled = true
+			return nil, nil, nil
+		},
+	}
+
+	actuator, _ := newTestActuator(mock)
+
+	// Both instanceTypeId and machineId set
+	spec := validProviderSpec()
+	spec.MachineID = "some-machine-id"
+	machine := createTestMachine(spec)
+
+	err := actuator.Create(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Create() expected validation error, got nil")
+	}
+	if createCalled {
+		t.Error("Create() should not have called the API with invalid spec")
+	}
+}
+
+func TestCreate_MissingRequiredFields(t *testing.T) {
+	mock := &mockCarbideClient{}
+	actuator, _ := newTestActuator(mock)
+
+	// Neither instanceTypeId nor machineId
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	machine := createTestMachine(spec)
+
+	err := actuator.Create(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Create() expected validation error for missing instanceTypeId/machineId")
+	}
+}
+
+func TestExists_TransientError(t *testing.T) {
+	mock := &mockCarbideClient{
+		getInstance: func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error) {
+			return nil, nil, fmt.Errorf("connection timeout")
+		},
+	}
+
+	actuator, _ := newTestActuator(mock)
+	instanceID := "test-instance-id"
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+
+	exists, err := actuator.Exists(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Exists() expected error on transient failure, got nil")
+	}
+	if exists {
+		t.Error("Exists() should return false on error")
+	}
+}
+
+func TestExists_NotFound(t *testing.T) {
+	mock := &mockCarbideClient{
+		getInstance: func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error) {
+			return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+		},
+	}
+
+	actuator, _ := newTestActuator(mock)
+	instanceID := "test-instance-id"
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+
+	exists, err := actuator.Exists(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Exists() unexpected error for 404: %v", err)
+	}
+	if exists {
+		t.Error("Exists() should return false for 404")
+	}
+}
+
+func TestExists_InstanceExists(t *testing.T) {
+	mock := &mockCarbideClient{
+		getInstance: func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error) {
+			return testInstance(instanceId), &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	actuator, _ := newTestActuator(mock)
+	instanceID := "test-instance-id"
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+
+	exists, err := actuator.Exists(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Exists() unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("Exists() should return true when instance exists")
+	}
+}
+
+func TestExists_NoInstanceID(t *testing.T) {
+	mock := &mockCarbideClient{}
+	actuator, _ := newTestActuator(mock)
+	machine := createTestMachine(validProviderSpec())
+
+	exists, err := actuator.Exists(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Exists() unexpected error: %v", err)
+	}
+	if exists {
+		t.Error("Exists() should return false when no instance ID is set")
+	}
+}
+
+func TestDelete_AlreadyDeleted(t *testing.T) {
+	mock := &mockCarbideClient{
+		deleteInstance: func(ctx context.Context, org string, instanceId string) (*http.Response, error) {
+			return &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+		},
+	}
+
+	actuator, _ := newTestActuator(mock)
+	instanceID := "test-instance-id"
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+
+	err := actuator.Delete(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Delete() unexpected error for already-deleted instance: %v", err)
+	}
+}
+
+func TestDelete_Success(t *testing.T) {
+	mock := &mockCarbideClient{
+		deleteInstance: func(ctx context.Context, org string, instanceId string) (*http.Response, error) {
+			return &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	actuator, _ := newTestActuator(mock)
+	instanceID := "test-instance-id"
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+
+	err := actuator.Delete(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+}
+
+func TestDelete_NoInstanceID(t *testing.T) {
+	mock := &mockCarbideClient{}
+	actuator, _ := newTestActuator(mock)
+	machine := createTestMachine(validProviderSpec())
+
+	err := actuator.Delete(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Delete() unexpected error when no instance ID: %v", err)
+	}
+}
+
+func TestValidateProviderSpec(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    v1beta1.NvidiaCarbideMachineProviderSpec
+		wantErr bool
+	}{
+		{
+			name:    "valid with instanceTypeId",
+			spec:    validProviderSpec(),
+			wantErr: false,
+		},
+		{
+			name: "valid with machineId",
+			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+				s := validProviderSpec()
+				s.InstanceTypeID = ""
+				s.MachineID = "machine-id"
+				return s
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "both instanceTypeId and machineId",
+			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+				s := validProviderSpec()
+				s.MachineID = "machine-id"
+				return s
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "neither instanceTypeId nor machineId",
+			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+				s := validProviderSpec()
+				s.InstanceTypeID = ""
+				return s
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "missing siteId",
+			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+				s := validProviderSpec()
+				s.SiteID = ""
+				return s
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "missing tenantId",
+			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+				s := validProviderSpec()
+				s.TenantID = ""
+				return s
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "missing vpcId",
+			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+				s := validProviderSpec()
+				s.VpcID = ""
+				return s
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "missing subnetId",
+			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+				s := validProviderSpec()
+				s.SubnetID = ""
+				return s
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "too many additional subnets",
+			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+				s := validProviderSpec()
+				s.AdditionalSubnetIDs = make([]v1beta1.AdditionalSubnet, 11)
+				return s
+			}(),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateProviderSpec(&tt.spec)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateProviderSpec() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
 }
 
 func TestProviderIDParsing(t *testing.T) {

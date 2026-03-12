@@ -22,16 +22,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 	machinev1beta1 "github.com/openshift/api/machine/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
+	carbidemetrics "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/metrics"
 	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/providerid"
 	bmm "github.com/nvidia/bare-metal-manager-rest/sdk/standard"
 )
@@ -99,6 +103,33 @@ func NewActuatorWithClient(
 	}
 }
 
+// validateProviderSpec validates the provider spec fields before making API calls.
+func validateProviderSpec(spec *v1beta1.NvidiaCarbideMachineProviderSpec) error {
+	if spec.InstanceTypeID != "" && spec.MachineID != "" {
+		return fmt.Errorf("specify either instanceTypeId or machineId, not both")
+	}
+	if spec.InstanceTypeID == "" && spec.MachineID == "" {
+		return fmt.Errorf("either instanceTypeId or machineId is required")
+	}
+	if spec.SiteID == "" {
+		return fmt.Errorf("siteId is required")
+	}
+	if spec.TenantID == "" {
+		return fmt.Errorf("tenantId is required")
+	}
+	if spec.VpcID == "" {
+		return fmt.Errorf("vpcId is required")
+	}
+	if spec.SubnetID == "" {
+		return fmt.Errorf("subnetId is required")
+	}
+	if len(spec.AdditionalSubnetIDs) > 10 {
+		return fmt.Errorf("too many additional subnets (max 10, got %d)",
+			len(spec.AdditionalSubnetIDs))
+	}
+	return nil
+}
+
 // buildInstanceRequest constructs the API request body from a provider spec.
 func buildInstanceRequest(
 	name string,
@@ -141,8 +172,9 @@ func buildInstanceRequest(
 		req.UserData = *bmm.NewNullableString(&userData)
 	}
 	// The API requires either ipxeScript or operatingSystemId.
-	// Provide a minimal iPXE script to satisfy the requirement.
-	{
+	if providerSpec.OperatingSystemID != "" {
+		req.OperatingSystemId = *bmm.NewNullableString(&providerSpec.OperatingSystemID)
+	} else {
 		ipxeScript := "#!ipxe\necho Booting via Carbide"
 		req.IpxeScript = *bmm.NewNullableString(&ipxeScript)
 	}
@@ -151,6 +183,43 @@ func buildInstanceRequest(
 	}
 	if len(providerSpec.Labels) > 0 {
 		req.Labels = providerSpec.Labels
+	}
+	if providerSpec.NetworkSecurityGroupID != "" {
+		req.NetworkSecurityGroupId = *bmm.NewNullableString(&providerSpec.NetworkSecurityGroupID)
+	}
+	if len(providerSpec.InfiniBandInterfaces) > 0 {
+		ibInterfaces := make([]bmm.InfiniBandInterfaceCreateRequest, 0, len(providerSpec.InfiniBandInterfaces))
+		for _, ib := range providerSpec.InfiniBandInterfaces {
+			ibReq := bmm.InfiniBandInterfaceCreateRequest{}
+			if ib.PartitionID != "" {
+				ibReq.PartitionId = &ib.PartitionID
+			}
+			if ib.Device != "" {
+				ibReq.Device = &ib.Device
+			}
+			if ib.IsPhysical {
+				ibReq.IsPhysical = ptr(true)
+			}
+			if ib.DeviceInstance != nil {
+				ibReq.DeviceInstance = ib.DeviceInstance
+			}
+			ibInterfaces = append(ibInterfaces, ibReq)
+		}
+		req.InfinibandInterfaces = ibInterfaces
+	}
+	if len(providerSpec.NVLinkInterfaces) > 0 {
+		nvlInterfaces := make([]bmm.NVLinkInterfaceCreateRequest, 0, len(providerSpec.NVLinkInterfaces))
+		for _, nvl := range providerSpec.NVLinkInterfaces {
+			nvlReq := bmm.NVLinkInterfaceCreateRequest{}
+			if nvl.NVLinkLogicalPartitionID != "" {
+				nvlReq.NvLinklogicalPartitionId = &nvl.NVLinkLogicalPartitionID
+			}
+			if nvl.DeviceInstance != nil {
+				nvlReq.DeviceInstance = nvl.DeviceInstance
+			}
+			nvlInterfaces = append(nvlInterfaces, nvlReq)
+		}
+		req.NvLinkInterfaces = nvlInterfaces
 	}
 
 	return req
@@ -169,6 +238,14 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 		return fmt.Errorf("failed to get provider spec: %w", err)
 	}
 
+	// Validate provider spec
+	if err := validateProviderSpec(providerSpec); err != nil {
+		if a.eventRecorder != nil {
+			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "InvalidSpec", "Invalid provider spec: %v", err)
+		}
+		return fmt.Errorf("invalid provider spec: %w", err)
+	}
+
 	// Get NVIDIA Carbide client and orgName
 	nvidiaCarbideClient, orgName, err := a.getNvidiaCarbideClient(ctx, providerSpec)
 	if err != nil {
@@ -181,12 +258,27 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	// Create instance
 	instance, httpResp, err := nvidiaCarbideClient.CreateInstance(ctx, orgName, instanceReq)
 	if err != nil {
+		statusCode := "unknown"
+		if httpResp != nil {
+			statusCode = strconv.Itoa(httpResp.StatusCode)
+		}
+		carbidemetrics.APICallErrors.WithLabelValues("CreateInstance", statusCode).Inc()
 		if a.eventRecorder != nil {
 			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedCreate", "Failed to create instance: %v", err)
 		}
 		if httpResp != nil && httpResp.Body != nil {
 			respBody, _ := io.ReadAll(httpResp.Body)
-			return fmt.Errorf("failed to create instance (status %d): %s: %w", httpResp.StatusCode, string(respBody), err)
+			type apiError struct {
+				Message string `json:"message"`
+				Code    string `json:"code"`
+			}
+			var parsedErr apiError
+			if json.Unmarshal(respBody, &parsedErr) == nil && parsedErr.Message != "" {
+				return fmt.Errorf("failed to create instance (status %d): %s: %w",
+					httpResp.StatusCode, parsedErr.Message, err)
+			}
+			return fmt.Errorf("failed to create instance (status %d): %w",
+				httpResp.StatusCode, err)
 		}
 		return fmt.Errorf("failed to create instance: %w", err)
 	}
@@ -221,7 +313,14 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 		}
 	}
 
-	if err := a.setProviderStatus(machineObj, providerStatus); err != nil {
+	meta.SetStatusCondition(&providerStatus.Conditions, metav1.Condition{
+		Type:    "InstanceProvisioned",
+		Status:  metav1.ConditionTrue,
+		Reason:  "InstanceCreated",
+		Message: fmt.Sprintf("Instance %s created successfully", *instance.Id),
+	})
+
+	if err := a.setProviderStatus(ctx, machineObj, providerStatus); err != nil {
 		return fmt.Errorf("failed to update provider status: %w", err)
 	}
 
@@ -231,10 +330,11 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 		return fmt.Errorf("failed to parse instance ID from response: %w", err)
 	}
 	pid := providerid.NewProviderID(orgName, providerSpec.TenantID, providerSpec.SiteID, instanceUUID)
-	if err := a.setProviderID(machineObj, pid.String()); err != nil {
+	if err := a.setProviderID(ctx, machineObj, pid.String()); err != nil {
 		return fmt.Errorf("failed to set provider ID: %w", err)
 	}
 
+	carbidemetrics.MachinesManaged.Inc()
 	if a.eventRecorder != nil {
 		a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "Created", "Created instance %s", *instance.Id)
 	}
@@ -284,6 +384,22 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 	if instance.Status != nil {
 		status := string(*instance.Status)
 		providerStatus.InstanceState = &status
+
+		if status == "Ready" {
+			meta.SetStatusCondition(&providerStatus.Conditions, metav1.Condition{
+				Type:    "InstanceReady",
+				Status:  metav1.ConditionTrue,
+				Reason:  "InstanceRunning",
+				Message: "Instance is in Ready state",
+			})
+		} else {
+			meta.SetStatusCondition(&providerStatus.Conditions, metav1.Condition{
+				Type:    "InstanceReady",
+				Status:  metav1.ConditionFalse,
+				Reason:  "InstanceNotReady",
+				Message: fmt.Sprintf("Instance is in %s state", status),
+			})
+		}
 	}
 	if instance.MachineId.Get() != nil {
 		providerStatus.MachineID = instance.MachineId.Get()
@@ -300,7 +416,7 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 		}
 	}
 
-	if err := a.setProviderStatus(machineObj, providerStatus); err != nil {
+	if err := a.setProviderStatus(ctx, machineObj, providerStatus); err != nil {
 		return fmt.Errorf("failed to update provider status: %w", err)
 	}
 
@@ -337,9 +453,12 @@ func (a *Actuator) Exists(ctx context.Context, machine runtime.Object) (bool, er
 	}
 
 	// Check if instance exists
-	instance, _, err := nvidiaCarbideClient.GetInstance(ctx, orgName, *providerStatus.InstanceID)
+	instance, httpResp, err := nvidiaCarbideClient.GetInstance(ctx, orgName, *providerStatus.InstanceID)
 	if err != nil {
-		return false, nil
+		if httpResp != nil && httpResp.StatusCode == http.StatusNotFound {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check instance existence: %w", err)
 	}
 
 	// Instance exists if we get a non-nil instance
@@ -379,6 +498,10 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 	// Delete instance
 	httpResp, err := nvidiaCarbideClient.DeleteInstance(ctx, orgName, *providerStatus.InstanceID)
 	if err != nil {
+		statusCode := "unknown"
+		if httpResp != nil {
+			statusCode = strconv.Itoa(httpResp.StatusCode)
+		}
 		// Treat 404 as success (instance already deleted)
 		if httpResp != nil && httpResp.StatusCode == 404 {
 			if a.eventRecorder != nil {
@@ -386,6 +509,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 					"Instance %s already deleted (404)", *providerStatus.InstanceID)
 			}
 		} else {
+			carbidemetrics.APICallErrors.WithLabelValues("DeleteInstance", statusCode).Inc()
 			if a.eventRecorder != nil {
 				a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedDelete", "Failed to delete instance: %v", err)
 			}
@@ -401,6 +525,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		return fmt.Errorf("delete instance returned unexpected status: %d", httpResp.StatusCode)
 	}
 
+	carbidemetrics.MachinesManaged.Dec()
 	if a.eventRecorder != nil {
 		a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "Deleted",
 			"Deleted instance %s", *providerStatus.InstanceID)
@@ -473,7 +598,7 @@ func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NvidiaCarb
 	return providerStatus, nil
 }
 
-func (a *Actuator) setProviderStatus(machine client.Object, status *v1beta1.NvidiaCarbideMachineProviderStatus) error {
+func (a *Actuator) setProviderStatus(ctx context.Context, machine client.Object, status *v1beta1.NvidiaCarbideMachineProviderStatus) error {
 	statusBytes, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("failed to marshal status: %w", err)
@@ -482,7 +607,7 @@ func (a *Actuator) setProviderStatus(machine client.Object, status *v1beta1.Nvid
 	switch m := machine.(type) {
 	case *machinev1beta1.Machine:
 		m.Status.ProviderStatus = &runtime.RawExtension{Raw: statusBytes}
-		if err := a.client.Status().Update(context.Background(), m); err != nil {
+		if err := a.client.Status().Update(ctx, m); err != nil {
 			return fmt.Errorf("failed to update machine status: %w", err)
 		}
 	case *unstructured.Unstructured:
@@ -493,7 +618,7 @@ func (a *Actuator) setProviderStatus(machine client.Object, status *v1beta1.Nvid
 		if err := unstructured.SetNestedField(m.Object, statusMap, "status", "providerStatus"); err != nil {
 			return fmt.Errorf("failed to set providerStatus: %w", err)
 		}
-		if err := a.client.Status().Update(context.Background(), m); err != nil {
+		if err := a.client.Status().Update(ctx, m); err != nil {
 			return fmt.Errorf("failed to update machine status: %w", err)
 		}
 	default:
@@ -503,18 +628,18 @@ func (a *Actuator) setProviderStatus(machine client.Object, status *v1beta1.Nvid
 	return nil
 }
 
-func (a *Actuator) setProviderID(machine client.Object, providerID string) error {
+func (a *Actuator) setProviderID(ctx context.Context, machine client.Object, providerID string) error {
 	switch m := machine.(type) {
 	case *machinev1beta1.Machine:
 		m.Spec.ProviderID = &providerID
-		if err := a.client.Update(context.Background(), m); err != nil {
+		if err := a.client.Update(ctx, m); err != nil {
 			return fmt.Errorf("failed to update machine: %w", err)
 		}
 	case *unstructured.Unstructured:
 		if err := unstructured.SetNestedField(m.Object, providerID, "spec", "providerID"); err != nil {
 			return fmt.Errorf("failed to set providerID: %w", err)
 		}
-		if err := a.client.Update(context.Background(), m); err != nil {
+		if err := a.client.Update(ctx, m); err != nil {
 			return fmt.Errorf("failed to update machine: %w", err)
 		}
 	default:
@@ -572,4 +697,28 @@ func (a *Actuator) getNvidiaCarbideClient(
 // ptr is a helper function to get a pointer to a value
 func ptr[T any](v T) *T {
 	return &v
+}
+
+type errorClass int
+
+const (
+	errorTransient errorClass = iota
+	errorPermanent
+	errorNotFound
+)
+
+func classifyHTTPError(httpResp *http.Response) errorClass {
+	if httpResp == nil {
+		return errorTransient
+	}
+	switch httpResp.StatusCode {
+	case 400, 403, 422:
+		return errorPermanent
+	case 404:
+		return errorNotFound
+	case 429, 500, 502, 503, 504:
+		return errorTransient
+	default:
+		return errorTransient
+	}
 }
