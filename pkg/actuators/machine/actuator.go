@@ -45,6 +45,7 @@ type NvidiaCarbideClientInterface interface {
 	CreateInstance(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error)
 	GetInstance(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error)
 	DeleteInstance(ctx context.Context, org string, instanceId string) (*http.Response, error)
+	GetMachine(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error)
 }
 
 // carbideClient wraps the SDK APIClient and injects auth context
@@ -71,6 +72,12 @@ func (c *carbideClient) GetInstance(
 
 func (c *carbideClient) DeleteInstance(ctx context.Context, org, instanceId string) (*http.Response, error) {
 	return c.client.InstanceAPI.DeleteInstance(c.authCtx(ctx), org, instanceId).Execute()
+}
+
+func (c *carbideClient) GetMachine(
+	ctx context.Context, org, machineId string,
+) (*bmm.Machine, *http.Response, error) {
+	return c.client.MachineAPI.GetMachine(c.authCtx(ctx), org, machineId).Execute()
 }
 
 // Actuator implements the OpenShift Machine actuator interface
@@ -380,30 +387,18 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 		return fmt.Errorf("get instance returned no data, status code: %d", httpResp.StatusCode)
 	}
 
-	// Update provider status
+	// Update provider status with state machine tracking
 	if instance.Status != nil {
 		status := string(*instance.Status)
 		providerStatus.InstanceState = &status
-
-		if status == "Ready" {
-			meta.SetStatusCondition(&providerStatus.Conditions, metav1.Condition{
-				Type:    "InstanceReady",
-				Status:  metav1.ConditionTrue,
-				Reason:  "InstanceRunning",
-				Message: "Instance is in Ready state",
-			})
-		} else {
-			meta.SetStatusCondition(&providerStatus.Conditions, metav1.Condition{
-				Type:    "InstanceReady",
-				Status:  metav1.ConditionFalse,
-				Reason:  "InstanceNotReady",
-				Message: fmt.Sprintf("Instance is in %s state", status),
-			})
-		}
+		setInstanceStateConditions(providerStatus, *instance.Status)
 	}
 	if instance.MachineId.Get() != nil {
 		providerStatus.MachineID = instance.MachineId.Get()
 	}
+
+	// Check machine health if a physical machine is assigned
+	a.updateMachineHealth(ctx, nvidiaCarbideClient, orgName, instance, providerStatus)
 
 	// Update addresses
 	providerStatus.Addresses = []v1beta1.MachineAddress{}
@@ -720,5 +715,120 @@ func classifyHTTPError(httpResp *http.Response) errorClass {
 		return errorTransient
 	default:
 		return errorTransient
+	}
+}
+
+// setInstanceStateConditions maps Carbide InstanceStatus values to provider
+// status conditions. The SDK defines: Pending, Provisioning, Configuring,
+// Ready, Updating, Rebooting, Terminating, Error.
+func setInstanceStateConditions(
+	providerStatus *v1beta1.NvidiaCarbideMachineProviderStatus,
+	status bmm.InstanceStatus,
+) {
+	switch status {
+	case bmm.INSTANCESTATUS_PENDING:
+		setCondition(providerStatus, "InstanceAllocating", metav1.ConditionTrue,
+			"Pending", "Instance creation request sent, awaiting allocation")
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+			"Pending", "Instance is pending allocation")
+
+	case bmm.INSTANCESTATUS_PROVISIONING:
+		setCondition(providerStatus, "InstanceAllocating", metav1.ConditionFalse,
+			"Allocated", "Instance has been allocated")
+		setCondition(providerStatus, "InstanceProvisioning", metav1.ConditionTrue,
+			"Provisioning", "Carbide is provisioning the machine")
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+			"Provisioning", "Instance is being provisioned")
+
+	case bmm.INSTANCESTATUS_CONFIGURING:
+		setCondition(providerStatus, "InstanceProvisioning", metav1.ConditionFalse,
+			"Provisioned", "Machine has been provisioned")
+		setCondition(providerStatus, "InstanceBootstrapping", metav1.ConditionTrue,
+			"Configuring", "OS installed, configuration in progress")
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+			"Configuring", "Instance is being configured")
+
+	case bmm.INSTANCESTATUS_READY:
+		setCondition(providerStatus, "InstanceBootstrapping", metav1.ConditionFalse,
+			"Complete", "Bootstrap completed")
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionTrue,
+			"InstanceRunning", "Instance is fully operational")
+
+	case bmm.INSTANCESTATUS_UPDATING:
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+			"Updating", "Instance is being updated")
+
+	case bmm.INSTANCESTATUS_REBOOTING:
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+			"Rebooting", "Instance is rebooting")
+
+	case bmm.INSTANCESTATUS_TERMINATING:
+		setCondition(providerStatus, "InstanceTerminating", metav1.ConditionTrue,
+			"Terminating", "Instance deletion in progress")
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+			"Terminating", "Instance is terminating")
+
+	case bmm.INSTANCESTATUS_ERROR:
+		setCondition(providerStatus, "InstanceError", metav1.ConditionTrue,
+			"Error", "Instance is in a terminal error state")
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+			"Error", "Instance encountered an error")
+
+	default:
+		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+			"Unknown", fmt.Sprintf("Instance is in unknown state: %s", string(status)))
+	}
+}
+
+func setCondition(
+	providerStatus *v1beta1.NvidiaCarbideMachineProviderStatus,
+	condType string, status metav1.ConditionStatus, reason, message string,
+) {
+	meta.SetStatusCondition(&providerStatus.Conditions, metav1.Condition{
+		Type:    condType,
+		Status:  status,
+		Reason:  reason,
+		Message: message,
+	})
+}
+
+// updateMachineHealth queries the Carbide Machine API for health data and
+// sets the MachineHealthy condition. Health failures are non-fatal — they
+// are logged but do not block the Update.
+func (a *Actuator) updateMachineHealth(
+	ctx context.Context,
+	nvidiaCarbideClient NvidiaCarbideClientInterface,
+	orgName string,
+	instance *bmm.Instance,
+	providerStatus *v1beta1.NvidiaCarbideMachineProviderStatus,
+) {
+	machineID, ok := instance.GetMachineIdOk()
+	if !ok || machineID == nil || *machineID == "" {
+		return
+	}
+
+	machine, httpResp, err := nvidiaCarbideClient.GetMachine(ctx, orgName, *machineID)
+	if err != nil || httpResp == nil || httpResp.StatusCode != http.StatusOK || machine == nil {
+		return
+	}
+
+	if machine.Health == nil {
+		return
+	}
+
+	if len(machine.Health.Alerts) == 0 {
+		setCondition(providerStatus, "MachineHealthy", metav1.ConditionTrue,
+			"Healthy", "Machine has no health alerts")
+		providerStatus.HealthLabels = map[string]string{
+			"nvidia-carbide.io/healthy": "true",
+		}
+	} else {
+		alertMsg := fmt.Sprintf("Machine has %d health alert(s)", len(machine.Health.Alerts))
+		setCondition(providerStatus, "MachineHealthy", metav1.ConditionFalse,
+			"Unhealthy", alertMsg)
+		providerStatus.HealthLabels = map[string]string{
+			"nvidia-carbide.io/healthy":            "false",
+			"nvidia-carbide.io/health-alert-count": fmt.Sprintf("%d", len(machine.Health.Alerts)),
+		}
 	}
 }

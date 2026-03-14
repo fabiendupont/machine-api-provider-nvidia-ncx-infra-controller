@@ -51,9 +51,22 @@ The provider translates OpenShift Machine API requests into NVIDIA Carbide REST 
 
 ## Dependencies
 
-- **[github.com/NVIDIA/carbide-rest/client](../carbide-rest/client)** - Auto-generated REST API client
+- **[github.com/NVIDIA/bare-metal-manager-rest/sdk/standard](https://github.com/NVIDIA/bare-metal-manager-rest)** - Auto-generated REST API client (SDK)
 - **[github.com/openshift/api](https://github.com/openshift/api)** - OpenShift Machine API types
 - **OpenShift 4.14+** or compatible Machine API implementation
+
+### SDK Dependency Note
+
+The Carbide REST SDK (`github.com/nvidia/bare-metal-manager-rest/sdk/standard`) does not
+yet have tagged releases for its `sdk/standard` sub-module. Until upstream tags the module,
+`go.mod` uses a `replace` directive pointing to a specific commit:
+
+```
+replace github.com/nvidia/bare-metal-manager-rest/sdk/standard => github.com/nvidia/bare-metal-manager-rest/sdk/standard v0.0.0-20260312022756-f3bba0a54054
+```
+
+When a tagged release becomes available, remove the `replace` directive and update the
+`require` entry to the actual version.
 
 ## Prerequisites
 

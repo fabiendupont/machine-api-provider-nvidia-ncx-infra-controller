@@ -115,6 +115,7 @@ type mockNvidiaCarbideClient struct {
 	) (*bmm.Instance, *http.Response, error)
 	getInstanceFunc    func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error)
 	deleteInstanceFunc func(ctx context.Context, org string, instanceId string) (*http.Response, error)
+	getMachineFunc     func(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error)
 }
 
 func (m *mockNvidiaCarbideClient) CreateInstance(
@@ -150,6 +151,15 @@ func (m *mockNvidiaCarbideClient) DeleteInstance(
 		return m.deleteInstanceFunc(ctx, org, instanceId)
 	}
 	return mockHTTPResponse(204), nil
+}
+
+func (m *mockNvidiaCarbideClient) GetMachine(
+	ctx context.Context, org string, machineId string,
+) (*bmm.Machine, *http.Response, error) {
+	if m.getMachineFunc != nil {
+		return m.getMachineFunc(ctx, org, machineId)
+	}
+	return nil, mockHTTPResponse(404), nil
 }
 
 var _ = Describe("Machine Actuator Integration", func() {

@@ -43,6 +43,7 @@ type mockCarbideClient struct {
 	createInstance func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error)
 	getInstance    func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error)
 	deleteInstance func(ctx context.Context, org string, instanceId string) (*http.Response, error)
+	getMachine     func(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error)
 }
 
 func (m *mockCarbideClient) CreateInstance(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
@@ -55,6 +56,13 @@ func (m *mockCarbideClient) GetInstance(ctx context.Context, org string, instanc
 
 func (m *mockCarbideClient) DeleteInstance(ctx context.Context, org string, instanceId string) (*http.Response, error) {
 	return m.deleteInstance(ctx, org, instanceId)
+}
+
+func (m *mockCarbideClient) GetMachine(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error) {
+	if m.getMachine != nil {
+		return m.getMachine(ctx, org, machineId)
+	}
+	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
 
 func newTestActuator(mock *mockCarbideClient) (*Actuator, *record.FakeRecorder) {
@@ -454,6 +462,133 @@ func TestValidateProviderSpec(t *testing.T) {
 				t.Errorf("validateProviderSpec() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestUpdate_StateTracking(t *testing.T) {
+	instanceID := uuid.New().String()
+
+	tests := []struct {
+		name           string
+		status         bmm.InstanceStatus
+		expectReady    bool
+		expectCondType string
+	}{
+		{"Pending", bmm.INSTANCESTATUS_PENDING, false, "InstanceAllocating"},
+		{"Provisioning", bmm.INSTANCESTATUS_PROVISIONING, false, "InstanceProvisioning"},
+		{"Configuring", bmm.INSTANCESTATUS_CONFIGURING, false, "InstanceBootstrapping"},
+		{"Ready", bmm.INSTANCESTATUS_READY, true, "InstanceReady"},
+		{"Terminating", bmm.INSTANCESTATUS_TERMINATING, false, "InstanceTerminating"},
+		{"Error", bmm.INSTANCESTATUS_ERROR, false, "InstanceError"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockCarbideClient{
+				getInstance: func(ctx context.Context, org string, id string) (*bmm.Instance, *http.Response, error) {
+					inst := testInstance(instanceID)
+					inst.Status = tt.status.Ptr()
+					return inst, &http.Response{StatusCode: 200}, nil
+				},
+			}
+
+			providerStatus := v1beta1.NvidiaCarbideMachineProviderStatus{
+				InstanceID: &instanceID,
+			}
+			machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+			actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+			err := actuator.Update(context.Background(), machine)
+			if err != nil {
+				t.Fatalf("Update() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestUpdate_HealthIntegration(t *testing.T) {
+	instanceID := uuid.New().String()
+	machineID := "machine-123"
+
+	mock := &mockCarbideClient{
+		getInstance: func(ctx context.Context, org string, id string) (*bmm.Instance, *http.Response, error) {
+			inst := testInstance(instanceID)
+			return inst, &http.Response{StatusCode: 200}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*bmm.Machine, *http.Response, error) {
+			return &bmm.Machine{
+				Id: &machineID,
+				Health: &bmm.MachineHealth{
+					Alerts: []bmm.MachineHealthProbeAlert{
+						{},
+					},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	providerStatus := v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	}
+	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+}
+
+func TestUpdate_HealthyMachine(t *testing.T) {
+	instanceID := uuid.New().String()
+	machineID := "machine-123"
+
+	mock := &mockCarbideClient{
+		getInstance: func(ctx context.Context, org string, id string) (*bmm.Instance, *http.Response, error) {
+			inst := testInstance(instanceID)
+			return inst, &http.Response{StatusCode: 200}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*bmm.Machine, *http.Response, error) {
+			return &bmm.Machine{
+				Id: &machineID,
+				Health: &bmm.MachineHealth{
+					Alerts: []bmm.MachineHealthProbeAlert{},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	providerStatus := v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	}
+	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+}
+
+func createTypedTestMachineWithStatus(
+	providerSpec v1beta1.NvidiaCarbideMachineProviderSpec,
+	providerStatus v1beta1.NvidiaCarbideMachineProviderStatus,
+) *machinev1beta1.Machine {
+	specBytes, _ := json.Marshal(providerSpec)
+	statusBytes, _ := json.Marshal(providerStatus)
+	return &machinev1beta1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-machine",
+			Namespace: "default",
+		},
+		Spec: machinev1beta1.MachineSpec{
+			ProviderSpec: machinev1beta1.ProviderSpec{
+				Value: &runtime.RawExtension{Raw: specBytes},
+			},
+		},
+		Status: machinev1beta1.MachineStatus{
+			ProviderStatus: &runtime.RawExtension{Raw: statusBytes},
+		},
 	}
 }
 

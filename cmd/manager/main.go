@@ -28,6 +28,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/actuators/machine"
 	ncpv1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
@@ -48,10 +50,12 @@ func init() {
 func main() {
 	var metricsAddr string
 	var probeAddr string
+	var webhookPort int
 	var enableLeaderElection bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -72,6 +76,9 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "machine-controller.nvidia-carbide.nvidia.com",
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Port: webhookPort,
+		}),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -92,6 +99,16 @@ func main() {
 
 	// MachineSet reconciliation is handled by the machine-api-operator.
 	// This provider only needs to implement the Machine actuator interface.
+
+	// Register validating webhook for Machine objects
+	mgr.GetWebhookServer().Register(
+		"/validate-machine",
+		&admission.Webhook{
+			Handler: &ncpv1beta1.MachineValidator{
+				Decoder: admission.NewDecoder(scheme),
+			},
+		},
+	)
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

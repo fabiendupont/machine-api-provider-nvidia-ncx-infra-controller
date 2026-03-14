@@ -139,6 +139,11 @@ type NvidiaCarbideMachineProviderStatus struct {
 	// Conditions represent the current state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// HealthLabels contains health-related labels matching the CCM.
+	// Keys: nvidia-carbide.io/healthy, nvidia-carbide.io/health-alert-count
+	// +optional
+	HealthLabels map[string]string `json:"healthLabels,omitempty"`
 }
 
 // MachineAddress contains information for a machine's network address
