@@ -8,6 +8,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	github.com/openshift/api v0.0.0-20240830023148-b7d0481c9094
+	github.com/prometheus/client_golang v1.23.2
 	k8s.io/api v0.35.0
 	k8s.io/apimachinery v0.35.0
 	k8s.io/client-go v0.35.0
@@ -41,7 +42,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
@@ -77,4 +77,4 @@ require (
 )
 
 // Pseudo-version until upstream tags the sdk/standard sub-module
-replace github.com/nvidia/bare-metal-manager-rest/sdk/standard => github.com/nvidia/bare-metal-manager-rest/sdk/standard v0.0.0-20260312022756-f3bba0a54054
+replace github.com/nvidia/bare-metal-manager-rest/sdk/standard => github.com/nvidia/bare-metal-manager-rest/sdk/standard v0.0.0-20260312230854-b38c365f5a3a
