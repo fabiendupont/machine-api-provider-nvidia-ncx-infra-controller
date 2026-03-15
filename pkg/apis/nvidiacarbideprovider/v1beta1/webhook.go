@@ -150,6 +150,15 @@ func validateUUIDs(spec *NvidiaCarbideMachineProviderSpec) error {
 		}
 	}
 
+	for i, svc := range spec.DpuExtensionServices {
+		if svc.ServiceID == "" {
+			return fmt.Errorf("dpuExtensionServices[%d].serviceId is required", i)
+		}
+		if _, err := uuid.Parse(svc.ServiceID); err != nil {
+			return fmt.Errorf("invalid UUID for dpuExtensionServices[%d].serviceId: %s", i, svc.ServiceID)
+		}
+	}
+
 	return nil
 }
 

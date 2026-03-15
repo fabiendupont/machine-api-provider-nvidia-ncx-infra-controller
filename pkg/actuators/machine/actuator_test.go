@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	machinev1beta1 "github.com/openshift/api/machine/v1beta1"
@@ -38,42 +39,86 @@ import (
 	bmm "github.com/nvidia/bare-metal-manager-rest/sdk/standard"
 )
 
+const testInstanceID = "test-instance-id"
+
 // mockCarbideClient implements NvidiaCarbideClientInterface for testing
 type mockCarbideClient struct {
-	createInstance func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error)
-	getInstance    func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error)
-	deleteInstance func(ctx context.Context, org string, instanceId string) (*http.Response, error)
-	getMachine     func(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error)
+	createInstance func(
+		ctx context.Context, org string, req bmm.InstanceCreateRequest,
+	) (*bmm.Instance, *http.Response, error)
+	getInstance func(
+		ctx context.Context, org string, instanceId string,
+	) (*bmm.Instance, *http.Response, error)
+	deleteInstance func(
+		ctx context.Context, org string, instanceId string,
+		deleteReq *bmm.InstanceDeleteRequest,
+	) (*http.Response, error)
+	getMachine func(
+		ctx context.Context, org string, machineId string,
+	) (*bmm.Machine, *http.Response, error)
+	updateInstance func(
+		ctx context.Context, org string, instanceId string,
+		req bmm.InstanceUpdateRequest,
+	) (*bmm.Instance, *http.Response, error)
+	getInstanceStatusHistory func(
+		ctx context.Context, org string, instanceId string,
+	) ([]bmm.StatusDetail, *http.Response, error)
 }
 
-func (m *mockCarbideClient) CreateInstance(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
+func (m *mockCarbideClient) CreateInstance(
+	ctx context.Context, org string, req bmm.InstanceCreateRequest,
+) (*bmm.Instance, *http.Response, error) {
 	return m.createInstance(ctx, org, req)
 }
 
-func (m *mockCarbideClient) GetInstance(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error) {
+func (m *mockCarbideClient) GetInstance(
+	ctx context.Context, org string, instanceId string,
+) (*bmm.Instance, *http.Response, error) {
 	return m.getInstance(ctx, org, instanceId)
 }
 
-func (m *mockCarbideClient) DeleteInstance(ctx context.Context, org string, instanceId string) (*http.Response, error) {
-	return m.deleteInstance(ctx, org, instanceId)
+func (m *mockCarbideClient) DeleteInstance(
+	ctx context.Context, org string, instanceId string,
+	deleteReq *bmm.InstanceDeleteRequest,
+) (*http.Response, error) {
+	return m.deleteInstance(ctx, org, instanceId, deleteReq)
 }
 
-func (m *mockCarbideClient) GetMachine(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error) {
+func (m *mockCarbideClient) GetMachine(
+	ctx context.Context, org string, machineId string,
+) (*bmm.Machine, *http.Response, error) {
 	if m.getMachine != nil {
 		return m.getMachine(ctx, org, machineId)
 	}
 	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
 
-func (m *mockCarbideClient) GetCurrentTenant(ctx context.Context, org string) (*bmm.Tenant, *http.Response, error) {
+func (m *mockCarbideClient) GetCurrentTenant(
+	ctx context.Context, org string,
+) (*bmm.Tenant, *http.Response, error) {
 	return nil, &http.Response{StatusCode: 200}, nil
 }
 
-func (m *mockCarbideClient) GetInstanceStatusHistory(ctx context.Context, org string, instanceId string) ([]bmm.StatusDetail, *http.Response, error) {
+func (m *mockCarbideClient) GetInstanceStatusHistory(
+	ctx context.Context, org string, instanceId string,
+) ([]bmm.StatusDetail, *http.Response, error) {
+	if m.getInstanceStatusHistory != nil {
+		return m.getInstanceStatusHistory(ctx, org, instanceId)
+	}
 	return nil, &http.Response{StatusCode: 200}, nil
 }
 
-func newTestActuator(mock *mockCarbideClient) (*Actuator, *record.FakeRecorder) {
+func (m *mockCarbideClient) UpdateInstance(
+	ctx context.Context, org string, instanceId string,
+	req bmm.InstanceUpdateRequest,
+) (*bmm.Instance, *http.Response, error) {
+	if m.updateInstance != nil {
+		return m.updateInstance(ctx, org, instanceId, req)
+	}
+	return nil, &http.Response{StatusCode: 200}, nil
+}
+
+func newTestActuator(mock *mockCarbideClient) *Actuator {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = machinev1beta1.AddToScheme(scheme)
@@ -83,11 +128,12 @@ func newTestActuator(mock *mockCarbideClient) (*Actuator, *record.FakeRecorder) 
 		Build()
 
 	recorder := record.NewFakeRecorder(10)
-	actuator := NewActuatorWithClient(fakeClient, recorder, mock, "test-org")
-	return actuator, recorder
+	return NewActuatorWithClient(fakeClient, recorder, mock, "test-org")
 }
 
-func newTestActuatorWithMachine(mock *mockCarbideClient, machine *machinev1beta1.Machine) (*Actuator, *record.FakeRecorder) {
+func newTestActuatorWithMachine(
+	mock *mockCarbideClient, machine *machinev1beta1.Machine,
+) (*Actuator, *record.FakeRecorder) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = machinev1beta1.AddToScheme(scheme)
@@ -178,7 +224,9 @@ func createTestMachineWithStatus(
 func TestCreate_Success(t *testing.T) {
 	instanceID := uuid.New().String()
 	mock := &mockCarbideClient{
-		createInstance: func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
+		createInstance: func(
+			ctx context.Context, org string, req bmm.InstanceCreateRequest,
+		) (*bmm.Instance, *http.Response, error) {
 			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
 		},
 	}
@@ -194,12 +242,14 @@ func TestCreate_Success(t *testing.T) {
 
 func TestCreate_APIError(t *testing.T) {
 	mock := &mockCarbideClient{
-		createInstance: func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
+		createInstance: func(
+			ctx context.Context, org string, req bmm.InstanceCreateRequest,
+		) (*bmm.Instance, *http.Response, error) {
 			return nil, nil, fmt.Errorf("connection refused")
 		},
 	}
 
-	actuator, _ := newTestActuator(mock)
+	actuator := newTestActuator(mock)
 	machine := createTestMachine(validProviderSpec())
 
 	err := actuator.Create(context.Background(), machine)
@@ -211,13 +261,15 @@ func TestCreate_APIError(t *testing.T) {
 func TestCreate_InvalidSpec(t *testing.T) {
 	createCalled := false
 	mock := &mockCarbideClient{
-		createInstance: func(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error) {
+		createInstance: func(
+			ctx context.Context, org string, req bmm.InstanceCreateRequest,
+		) (*bmm.Instance, *http.Response, error) {
 			createCalled = true
 			return nil, nil, nil
 		},
 	}
 
-	actuator, _ := newTestActuator(mock)
+	actuator := newTestActuator(mock)
 
 	// Both instanceTypeId and machineId set
 	spec := validProviderSpec()
@@ -235,7 +287,7 @@ func TestCreate_InvalidSpec(t *testing.T) {
 
 func TestCreate_MissingRequiredFields(t *testing.T) {
 	mock := &mockCarbideClient{}
-	actuator, _ := newTestActuator(mock)
+	actuator := newTestActuator(mock)
 
 	// Neither instanceTypeId nor machineId
 	spec := validProviderSpec()
@@ -255,8 +307,8 @@ func TestExists_TransientError(t *testing.T) {
 		},
 	}
 
-	actuator, _ := newTestActuator(mock)
-	instanceID := "test-instance-id"
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
 	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
@@ -277,8 +329,8 @@ func TestExists_NotFound(t *testing.T) {
 		},
 	}
 
-	actuator, _ := newTestActuator(mock)
-	instanceID := "test-instance-id"
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
 	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
@@ -299,8 +351,8 @@ func TestExists_InstanceExists(t *testing.T) {
 		},
 	}
 
-	actuator, _ := newTestActuator(mock)
-	instanceID := "test-instance-id"
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
 	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
@@ -316,7 +368,7 @@ func TestExists_InstanceExists(t *testing.T) {
 
 func TestExists_NoInstanceID(t *testing.T) {
 	mock := &mockCarbideClient{}
-	actuator, _ := newTestActuator(mock)
+	actuator := newTestActuator(mock)
 	machine := createTestMachine(validProviderSpec())
 
 	exists, err := actuator.Exists(context.Background(), machine)
@@ -330,13 +382,16 @@ func TestExists_NoInstanceID(t *testing.T) {
 
 func TestDelete_AlreadyDeleted(t *testing.T) {
 	mock := &mockCarbideClient{
-		deleteInstance: func(ctx context.Context, org string, instanceId string) (*http.Response, error) {
+		deleteInstance: func(
+			ctx context.Context, org string, instanceId string,
+			deleteReq *bmm.InstanceDeleteRequest,
+		) (*http.Response, error) {
 			return &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 		},
 	}
 
-	actuator, _ := newTestActuator(mock)
-	instanceID := "test-instance-id"
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
 	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
@@ -349,13 +404,16 @@ func TestDelete_AlreadyDeleted(t *testing.T) {
 
 func TestDelete_Success(t *testing.T) {
 	mock := &mockCarbideClient{
-		deleteInstance: func(ctx context.Context, org string, instanceId string) (*http.Response, error) {
+		deleteInstance: func(
+			ctx context.Context, org string, instanceId string,
+			deleteReq *bmm.InstanceDeleteRequest,
+		) (*http.Response, error) {
 			return &http.Response{StatusCode: 200}, nil
 		},
 	}
 
-	actuator, _ := newTestActuator(mock)
-	instanceID := "test-instance-id"
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
 	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
@@ -368,7 +426,7 @@ func TestDelete_Success(t *testing.T) {
 
 func TestDelete_NoInstanceID(t *testing.T) {
 	mock := &mockCarbideClient{}
-	actuator, _ := newTestActuator(mock)
+	actuator := newTestActuator(mock)
 	machine := createTestMachine(validProviderSpec())
 
 	err := actuator.Delete(context.Background(), machine)
@@ -597,6 +655,153 @@ func createTypedTestMachineWithStatus(
 		Status: machinev1beta1.MachineStatus{
 			ProviderStatus: &runtime.RawExtension{Raw: statusBytes},
 		},
+	}
+}
+
+func TestDelete_MHCRemediation(t *testing.T) {
+	var capturedDeleteReq *bmm.InstanceDeleteRequest
+	mock := &mockCarbideClient{
+		deleteInstance: func(
+			ctx context.Context, org string, instanceId string,
+			deleteReq *bmm.InstanceDeleteRequest,
+		) (*http.Response, error) {
+			capturedDeleteReq = deleteReq
+			return &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+	// Set the MHC remediation annotation
+	machine.SetAnnotations(map[string]string{
+		"machine.openshift.io/unhealthy": "",
+	})
+
+	err := actuator.Delete(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+	if capturedDeleteReq == nil {
+		t.Fatal("Delete() should have passed InstanceDeleteRequest for MHC remediation")
+	}
+	if capturedDeleteReq.MachineHealthIssue == nil {
+		t.Fatal("Delete() should have set MachineHealthIssue")
+	}
+	if *capturedDeleteReq.MachineHealthIssue.Category != "MachineHealthCheck" {
+		t.Errorf("Expected category MachineHealthCheck, got %s", *capturedDeleteReq.MachineHealthIssue.Category)
+	}
+}
+
+func TestDelete_NoMHCRemediation(t *testing.T) {
+	var capturedDeleteReq *bmm.InstanceDeleteRequest
+	mock := &mockCarbideClient{
+		deleteInstance: func(
+			ctx context.Context, org string, instanceId string,
+			deleteReq *bmm.InstanceDeleteRequest,
+		) (*http.Response, error) {
+			capturedDeleteReq = deleteReq
+			return &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+
+	err := actuator.Delete(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Delete() unexpected error: %v", err)
+	}
+	if capturedDeleteReq != nil {
+		t.Error("Delete() should not have passed InstanceDeleteRequest without MHC annotation")
+	}
+}
+
+func TestUpdate_StatusHistoryOnError(t *testing.T) {
+	instanceID := uuid.New().String()
+	errorStatus := bmm.INSTANCESTATUS_ERROR
+
+	mock := &mockCarbideClient{
+		getInstance: func(ctx context.Context, org string, id string) (*bmm.Instance, *http.Response, error) {
+			inst := testInstance(instanceID)
+			inst.Status = &errorStatus
+			return inst, &http.Response{StatusCode: 200}, nil
+		},
+		getInstanceStatusHistory: func(
+			ctx context.Context, org string, id string,
+		) ([]bmm.StatusDetail, *http.Response, error) {
+			now := time.Now()
+			errorMsg := "Machine allocation failed"
+			errorStr := string(bmm.INSTANCESTATUS_ERROR)
+			provStr := string(bmm.INSTANCESTATUS_PROVISIONING)
+			return []bmm.StatusDetail{
+				{Status: &provStr, Created: &now},
+				{Status: &errorStr, Message: &errorMsg, Created: &now},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	providerStatus := v1beta1.NvidiaCarbideMachineProviderStatus{
+		InstanceID: &instanceID,
+	}
+	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+	actuator, recorder := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+
+	// Verify Warning events were recorded
+	close(recorder.Events)
+	eventCount := 0
+	for range recorder.Events {
+		eventCount++
+	}
+	if eventCount == 0 {
+		t.Error("Expected Warning events for status history on Error state")
+	}
+}
+
+func TestCreate_WithDpuExtensionServices(t *testing.T) {
+	instanceID := uuid.New().String()
+	updateCalled := false
+	mock := &mockCarbideClient{
+		createInstance: func(
+			ctx context.Context, org string, req bmm.InstanceCreateRequest,
+		) (*bmm.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+		updateInstance: func(
+			ctx context.Context, org string, id string,
+			req bmm.InstanceUpdateRequest,
+		) (*bmm.Instance, *http.Response, error) {
+			updateCalled = true
+			if len(req.DpuExtensionServiceDeployments) != 1 {
+				t.Errorf("Expected 1 DPU deployment, got %d", len(req.DpuExtensionServiceDeployments))
+			}
+			return testInstance(instanceID), &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.DpuExtensionServices = []v1beta1.DpuExtensionServiceSpec{
+		{ServiceID: "aa0e8400-e29b-41d4-a716-446655440010", Version: "1.0.0"},
+	}
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+	if !updateCalled {
+		t.Error("Create() should have called UpdateInstance for DPU extension services")
 	}
 }
 

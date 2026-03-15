@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	machinev1beta1 "github.com/openshift/api/machine/v1beta1"
@@ -42,12 +43,29 @@ import (
 
 // NvidiaCarbideClientInterface defines the methods needed from NVIDIA Carbide REST client
 type NvidiaCarbideClientInterface interface {
-	CreateInstance(ctx context.Context, org string, req bmm.InstanceCreateRequest) (*bmm.Instance, *http.Response, error)
-	GetInstance(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error)
-	DeleteInstance(ctx context.Context, org string, instanceId string) (*http.Response, error)
-	GetMachine(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error)
-	GetCurrentTenant(ctx context.Context, org string) (*bmm.Tenant, *http.Response, error)
-	GetInstanceStatusHistory(ctx context.Context, org string, instanceId string) ([]bmm.StatusDetail, *http.Response, error)
+	CreateInstance(
+		ctx context.Context, org string, req bmm.InstanceCreateRequest,
+	) (*bmm.Instance, *http.Response, error)
+	GetInstance(
+		ctx context.Context, org string, instanceId string,
+	) (*bmm.Instance, *http.Response, error)
+	DeleteInstance(
+		ctx context.Context, org string, instanceId string,
+		deleteReq *bmm.InstanceDeleteRequest,
+	) (*http.Response, error)
+	UpdateInstance(
+		ctx context.Context, org string, instanceId string,
+		req bmm.InstanceUpdateRequest,
+	) (*bmm.Instance, *http.Response, error)
+	GetMachine(
+		ctx context.Context, org string, machineId string,
+	) (*bmm.Machine, *http.Response, error)
+	GetCurrentTenant(
+		ctx context.Context, org string,
+	) (*bmm.Tenant, *http.Response, error)
+	GetInstanceStatusHistory(
+		ctx context.Context, org string, instanceId string,
+	) ([]bmm.StatusDetail, *http.Response, error)
 }
 
 // carbideClient wraps the SDK APIClient and injects auth context
@@ -72,8 +90,24 @@ func (c *carbideClient) GetInstance(
 	return c.client.InstanceAPI.GetInstance(c.authCtx(ctx), org, instanceId).Execute()
 }
 
-func (c *carbideClient) DeleteInstance(ctx context.Context, org, instanceId string) (*http.Response, error) {
-	return c.client.InstanceAPI.DeleteInstance(c.authCtx(ctx), org, instanceId).Execute()
+func (c *carbideClient) DeleteInstance(
+	ctx context.Context, org, instanceId string,
+	deleteReq *bmm.InstanceDeleteRequest,
+) (*http.Response, error) {
+	r := c.client.InstanceAPI.DeleteInstance(c.authCtx(ctx), org, instanceId)
+	if deleteReq != nil {
+		r = r.InstanceDeleteRequest(*deleteReq)
+	}
+	return r.Execute()
+}
+
+func (c *carbideClient) UpdateInstance(
+	ctx context.Context, org, instanceId string,
+	req bmm.InstanceUpdateRequest,
+) (*bmm.Instance, *http.Response, error) {
+	return c.client.InstanceAPI.UpdateInstance(
+		c.authCtx(ctx), org, instanceId,
+	).InstanceUpdateRequest(req).Execute()
 }
 
 func (c *carbideClient) GetMachine(
@@ -93,6 +127,8 @@ func (c *carbideClient) GetInstanceStatusHistory(
 ) ([]bmm.StatusDetail, *http.Response, error) {
 	return c.client.InstanceAPI.GetInstanceStatusHistory(c.authCtx(ctx), org, instanceId).Execute()
 }
+
+const statusCodeUnknown = "unknown"
 
 // Actuator implements the OpenShift Machine actuator interface
 type Actuator struct {
@@ -294,38 +330,22 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	instanceReq := buildInstanceRequest(machineObj.GetName(), providerSpec)
 
 	// Create instance
-	instance, httpResp, err := nvidiaCarbideClient.CreateInstance(ctx, orgName, instanceReq)
+	instance, httpResp, err := nvidiaCarbideClient.CreateInstance(
+		ctx, orgName, instanceReq,
+	)
 	if err != nil {
-		statusCode := "unknown"
-		if httpResp != nil {
-			statusCode = strconv.Itoa(httpResp.StatusCode)
-		}
-		carbidemetrics.APICallErrors.WithLabelValues("CreateInstance", statusCode).Inc()
-		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedCreate", "Failed to create instance: %v", err)
-		}
-		if httpResp != nil && httpResp.Body != nil {
-			respBody, _ := io.ReadAll(httpResp.Body)
-			type apiError struct {
-				Message string `json:"message"`
-				Code    string `json:"code"`
-			}
-			var parsedErr apiError
-			if json.Unmarshal(respBody, &parsedErr) == nil && parsedErr.Message != "" {
-				return fmt.Errorf("failed to create instance (status %d): %s: %w",
-					httpResp.StatusCode, parsedErr.Message, err)
-			}
-			return fmt.Errorf("failed to create instance (status %d): %w",
-				httpResp.StatusCode, err)
-		}
-		return fmt.Errorf("failed to create instance: %w", err)
+		return a.handleCreateError(machineObj, httpResp, err)
 	}
-
 	if instance == nil {
 		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedCreate", "Create instance returned no data")
+			a.eventRecorder.Eventf(machineObj,
+				corev1.EventTypeWarning, "FailedCreate",
+				"Create instance returned no data")
 		}
-		return fmt.Errorf("create instance returned no data, status code: %d", httpResp.StatusCode)
+		return fmt.Errorf(
+			"create instance returned no data, status code: %d",
+			httpResp.StatusCode,
+		)
 	}
 
 	// Build provider status
@@ -370,6 +390,16 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	pid := providerid.NewProviderID(orgName, providerSpec.TenantID, providerSpec.SiteID, instanceUUID)
 	if err := a.setProviderID(ctx, machineObj, pid.String()); err != nil {
 		return fmt.Errorf("failed to set provider ID: %w", err)
+	}
+
+	// Deploy DPU extension services if specified
+	if len(providerSpec.DpuExtensionServices) > 0 {
+		if err := a.deployDpuExtensionServices(
+			ctx, nvidiaCarbideClient, orgName,
+			machineObj, *instance.Id, providerSpec,
+		); err != nil {
+			return err
+		}
 	}
 
 	carbidemetrics.MachinesManaged.Inc()
@@ -430,6 +460,9 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 
 	// Check machine health if a physical machine is assigned
 	a.updateMachineHealth(ctx, nvidiaCarbideClient, orgName, instance, providerStatus)
+
+	// Record status history as events when instance is stuck or in error
+	a.checkStatusHistory(ctx, nvidiaCarbideClient, orgName, machineObj, instance)
 
 	// Update addresses
 	providerStatus.Addresses = []v1beta1.MachineAddress{}
@@ -521,10 +554,25 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		return fmt.Errorf("failed to create NVIDIA Carbide client: %w", err)
 	}
 
+	// Check if this deletion is triggered by MachineHealthCheck remediation
+	var deleteReq *bmm.InstanceDeleteRequest
+	if isMHCRemediation(machineObj) {
+		deleteReq = &bmm.InstanceDeleteRequest{
+			MachineHealthIssue: &bmm.MachineHealthIssue{
+				Category: ptr("MachineHealthCheck"),
+				Summary:  ptr("Node marked unhealthy by OpenShift MachineHealthCheck"),
+			},
+		}
+		if a.eventRecorder != nil {
+			a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "MHCRemediation",
+				"Reporting machine health issue to Carbide for break-fix workflow")
+		}
+	}
+
 	// Delete instance
-	httpResp, err := nvidiaCarbideClient.DeleteInstance(ctx, orgName, *providerStatus.InstanceID)
+	httpResp, err := nvidiaCarbideClient.DeleteInstance(ctx, orgName, *providerStatus.InstanceID, deleteReq)
 	if err != nil {
-		statusCode := "unknown"
+		statusCode := statusCodeUnknown
 		if httpResp != nil {
 			statusCode = strconv.Itoa(httpResp.StatusCode)
 		}
@@ -624,7 +672,10 @@ func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NvidiaCarb
 	return providerStatus, nil
 }
 
-func (a *Actuator) setProviderStatus(ctx context.Context, machine client.Object, status *v1beta1.NvidiaCarbideMachineProviderStatus) error {
+func (a *Actuator) setProviderStatus(
+	ctx context.Context, machine client.Object,
+	status *v1beta1.NvidiaCarbideMachineProviderStatus,
+) error {
 	statusBytes, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("failed to marshal status: %w", err)
@@ -725,30 +776,6 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
-type errorClass int
-
-const (
-	errorTransient errorClass = iota
-	errorPermanent
-	errorNotFound
-)
-
-func classifyHTTPError(httpResp *http.Response) errorClass {
-	if httpResp == nil {
-		return errorTransient
-	}
-	switch httpResp.StatusCode {
-	case 400, 403, 422:
-		return errorPermanent
-	case 404:
-		return errorNotFound
-	case 429, 500, 502, 503, 504:
-		return errorTransient
-	default:
-		return errorTransient
-	}
-}
-
 // setInstanceStateConditions maps Carbide InstanceStatus values to provider
 // status conditions. The SDK defines: Pending, Provisioning, Configuring,
 // Ready, Updating, Rebooting, Terminating, Error.
@@ -821,6 +848,193 @@ func setCondition(
 		Reason:  reason,
 		Message: message,
 	})
+}
+
+// handleCreateError processes API errors from CreateInstance, recording
+// metrics and events and returning a descriptive error.
+func (a *Actuator) handleCreateError(
+	machineObj client.Object, httpResp *http.Response, err error,
+) error {
+	statusCode := statusCodeUnknown
+	if httpResp != nil {
+		statusCode = strconv.Itoa(httpResp.StatusCode)
+	}
+	carbidemetrics.APICallErrors.WithLabelValues(
+		"CreateInstance", statusCode,
+	).Inc()
+	if a.eventRecorder != nil {
+		a.eventRecorder.Eventf(machineObj,
+			corev1.EventTypeWarning, "FailedCreate",
+			"Failed to create instance: %v", err)
+	}
+	if httpResp != nil && httpResp.Body != nil {
+		respBody, _ := io.ReadAll(httpResp.Body)
+		type apiError struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		}
+		var parsedErr apiError
+		if json.Unmarshal(respBody, &parsedErr) == nil &&
+			parsedErr.Message != "" {
+			return fmt.Errorf(
+				"failed to create instance (status %d): %s: %w",
+				httpResp.StatusCode, parsedErr.Message, err,
+			)
+		}
+		return fmt.Errorf(
+			"failed to create instance (status %d): %w",
+			httpResp.StatusCode, err,
+		)
+	}
+	return fmt.Errorf("failed to create instance: %w", err)
+}
+
+// deployDpuExtensionServices deploys DPU extension services on a newly
+// created instance via the UpdateInstance API.
+func (a *Actuator) deployDpuExtensionServices(
+	ctx context.Context,
+	nvidiaCarbideClient NvidiaCarbideClientInterface,
+	orgName string,
+	machineObj client.Object,
+	instanceID string,
+	providerSpec *v1beta1.NvidiaCarbideMachineProviderSpec,
+) error {
+	dpuDeployments := make(
+		[]bmm.DpuExtensionServiceDeploymentRequest,
+		0, len(providerSpec.DpuExtensionServices),
+	)
+	for _, svc := range providerSpec.DpuExtensionServices {
+		dpuReq := bmm.DpuExtensionServiceDeploymentRequest{
+			DpuExtensionServiceId: &svc.ServiceID,
+		}
+		if svc.Version != "" {
+			dpuReq.Version = &svc.Version
+		}
+		dpuDeployments = append(dpuDeployments, dpuReq)
+	}
+	updateReq := bmm.InstanceUpdateRequest{
+		DpuExtensionServiceDeployments: dpuDeployments,
+	}
+	_, updateResp, updateErr := nvidiaCarbideClient.UpdateInstance(
+		ctx, orgName, instanceID, updateReq,
+	)
+	if updateErr != nil {
+		statusCode := statusCodeUnknown
+		if updateResp != nil {
+			statusCode = strconv.Itoa(updateResp.StatusCode)
+		}
+		carbidemetrics.APICallErrors.WithLabelValues(
+			"UpdateInstance", statusCode,
+		).Inc()
+		if a.eventRecorder != nil {
+			a.eventRecorder.Eventf(machineObj,
+				corev1.EventTypeWarning, "DPUDeployFailed",
+				"Failed to deploy DPU extension services: %v",
+				updateErr)
+		}
+		return fmt.Errorf(
+			"failed to deploy DPU extension services: %w", updateErr,
+		)
+	}
+	if a.eventRecorder != nil {
+		a.eventRecorder.Eventf(machineObj,
+			corev1.EventTypeNormal, "DPUDeployed",
+			"Deployed %d DPU extension service(s)",
+			len(providerSpec.DpuExtensionServices))
+	}
+	return nil
+}
+
+// provisioningStuckThreshold is the duration after which a Provisioning instance
+// is considered stuck and status history is emitted as Warning events.
+const provisioningStuckThreshold = 5 * time.Minute
+
+// checkStatusHistory fetches the instance status history and records transitions
+// as Warning events when the instance is in Error state or has been Provisioning
+// for more than 5 minutes. This aids debugging without direct API access.
+func (a *Actuator) checkStatusHistory(
+	ctx context.Context,
+	nvidiaCarbideClient NvidiaCarbideClientInterface,
+	orgName string,
+	machineObj client.Object,
+	instance *bmm.Instance,
+) {
+	if instance.Status == nil || a.eventRecorder == nil {
+		return
+	}
+
+	shouldFetch := false
+	switch *instance.Status {
+	case bmm.INSTANCESTATUS_ERROR:
+		shouldFetch = true
+	case bmm.INSTANCESTATUS_PROVISIONING:
+		// Check if Provisioning for more than 5 minutes using status history
+		shouldFetch = true
+	default:
+		return
+	}
+
+	if !shouldFetch {
+		return
+	}
+
+	history, httpResp, err := nvidiaCarbideClient.GetInstanceStatusHistory(ctx, orgName, *instance.Id)
+	if err != nil || httpResp == nil || httpResp.StatusCode != http.StatusOK || len(history) == 0 {
+		return
+	}
+
+	// For Provisioning state, check if it's been stuck for more than the threshold
+	if *instance.Status == bmm.INSTANCESTATUS_PROVISIONING {
+		stuck := false
+		for _, entry := range history {
+			if entry.Status != nil && *entry.Status == string(bmm.INSTANCESTATUS_PROVISIONING) && entry.Created != nil {
+				if time.Since(*entry.Created) > provisioningStuckThreshold {
+					stuck = true
+				}
+				break
+			}
+		}
+		if !stuck {
+			return
+		}
+		a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "ProvisioningStuck",
+			"Instance has been in Provisioning state for more than %s", provisioningStuckThreshold)
+	}
+
+	// Record status transitions as Warning events for debugging
+	for _, entry := range history {
+		status := "unknown"
+		if entry.Status != nil {
+			status = *entry.Status
+		}
+		msg := ""
+		if entry.Message != nil {
+			msg = *entry.Message
+		}
+		ts := ""
+		if entry.Created != nil {
+			ts = entry.Created.Format(time.RFC3339)
+		}
+		if msg != "" {
+			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "StatusHistory",
+				"[%s] %s: %s", ts, status, msg)
+		} else {
+			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "StatusHistory",
+				"[%s] %s", ts, status)
+		}
+	}
+}
+
+// isMHCRemediation detects if the Machine deletion was triggered by
+// OpenShift MachineHealthCheck remediation. MHC sets the annotation
+// "machine.openshift.io/unhealthy" on the Machine before requesting deletion.
+func isMHCRemediation(machine client.Object) bool {
+	annotations := machine.GetAnnotations()
+	if annotations == nil {
+		return false
+	}
+	_, hasUnhealthy := annotations["machine.openshift.io/unhealthy"]
+	return hasUnhealthy
 }
 
 // updateMachineHealth queries the Carbide Machine API for health data and

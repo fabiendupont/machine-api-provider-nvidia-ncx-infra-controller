@@ -62,11 +62,17 @@ yet have tagged releases for its `sdk/standard` sub-module. Until upstream tags 
 `go.mod` uses a `replace` directive pointing to a specific commit:
 
 ```
-replace github.com/nvidia/bare-metal-manager-rest/sdk/standard => github.com/nvidia/bare-metal-manager-rest/sdk/standard v0.0.0-20260312022756-f3bba0a54054
+replace github.com/nvidia/bare-metal-manager-rest/sdk/standard => github.com/nvidia/bare-metal-manager-rest/sdk/standard v0.0.0-20260312230854-b38c365f5a3a
 ```
 
-When a tagged release becomes available, remove the `replace` directive and update the
-`require` entry to the actual version.
+**Why this is necessary:** Go modules require each sub-module (`sdk/standard/` lives
+under the parent `bare-metal-manager-rest` repository) to have its own `go.mod` with
+a tagged version. The upstream repository has not yet tagged the `sdk/standard`
+sub-module, so `go get` cannot resolve it without the replace directive.
+
+**Tracking:** Monitor the upstream repository for a tagged release of the
+`sdk/standard` sub-module (e.g., `sdk/standard/v0.1.0`). When available, remove the
+`replace` directive and update the `require` entry to the actual version.
 
 ## Prerequisites
 
@@ -234,6 +240,13 @@ spec:
 | `userData` | string | No | Cloud-init user data |
 | `sshKeyGroupIds` | []string | No | SSH key group UUIDs |
 | `labels` | map[string]string | No | Labels to apply to instance |
+| `description` | string | No | Description for the NVIDIA Carbide instance |
+| `operatingSystemId` | string | No | Carbide operating system UUID to install |
+| `networkSecurityGroupId` | string | No | Network security group UUID to attach |
+| `alwaysBootWithCustomIpxe` | bool | No | Always run iPXE script on reboot |
+| `infiniBandInterfaces` | []InfiniBandInterfaceSpec | No | InfiniBand partition attachments |
+| `nvLinkInterfaces` | []NVLinkInterfaceSpec | No | NVLink logical partition attachments |
+| `dpuExtensionServices` | []DpuExtensionServiceSpec | No | DPU Extension Services to deploy after creation |
 | `credentialsSecret` | CredentialsSecretReference | Yes | Secret containing API credentials |
 
 \* Must specify exactly one of `instanceTypeId` or `machineId`
@@ -244,8 +257,10 @@ spec:
 |-------|------|-------------|
 | `instanceId` | string | NVIDIA Carbide instance UUID |
 | `machineId` | string | Physical machine ID |
-| `instanceState` | string | Instance state (e.g., "running", "stopped") |
+| `instanceState` | string | Instance lifecycle state (Pending, Provisioning, Configuring, Ready, etc.) |
 | `addresses` | []MachineAddress | IP addresses assigned to the machine |
+| `conditions` | []Condition | Instance lifecycle conditions (InstanceReady, MachineHealthy, etc.) |
+| `healthLabels` | map[string]string | Health labels matching the CCM (nvidia-carbide.io/healthy) |
 
 ## Development
 

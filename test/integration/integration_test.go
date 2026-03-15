@@ -113,9 +113,16 @@ type mockNvidiaCarbideClient struct {
 	createInstanceFunc func(
 		ctx context.Context, org string, req bmm.InstanceCreateRequest,
 	) (*bmm.Instance, *http.Response, error)
-	getInstanceFunc    func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error)
-	deleteInstanceFunc func(ctx context.Context, org string, instanceId string) (*http.Response, error)
-	getMachineFunc     func(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error)
+	getInstanceFunc func(
+		ctx context.Context, org string, instanceId string,
+	) (*bmm.Instance, *http.Response, error)
+	deleteInstanceFunc func(
+		ctx context.Context, org string, instanceId string,
+		deleteReq *bmm.InstanceDeleteRequest,
+	) (*http.Response, error)
+	getMachineFunc func(
+		ctx context.Context, org string, machineId string,
+	) (*bmm.Machine, *http.Response, error)
 }
 
 func (m *mockNvidiaCarbideClient) CreateInstance(
@@ -145,12 +152,18 @@ func (m *mockNvidiaCarbideClient) GetInstance(
 }
 
 func (m *mockNvidiaCarbideClient) DeleteInstance(
-	ctx context.Context, org string, instanceId string,
+	ctx context.Context, org string, instanceId string, deleteReq *bmm.InstanceDeleteRequest,
 ) (*http.Response, error) {
 	if m.deleteInstanceFunc != nil {
-		return m.deleteInstanceFunc(ctx, org, instanceId)
+		return m.deleteInstanceFunc(ctx, org, instanceId, deleteReq)
 	}
 	return mockHTTPResponse(204), nil
+}
+
+func (m *mockNvidiaCarbideClient) UpdateInstance(
+	ctx context.Context, org string, instanceId string, req bmm.InstanceUpdateRequest,
+) (*bmm.Instance, *http.Response, error) {
+	return nil, mockHTTPResponse(200), nil
 }
 
 func (m *mockNvidiaCarbideClient) GetMachine(
@@ -206,10 +219,11 @@ var _ = Describe("Machine Actuator Integration", func() {
 
 		// Create Machine with NvidiaCarbideMachineProviderSpec
 		providerSpec := v1beta1.NvidiaCarbideMachineProviderSpec{
-			SiteID:   "8a880c71-fe4b-4e43-9e24-ebfcb8a84c5f",
-			TenantID: "b013708a-99f0-47b2-a630-cabb4ae1d3df",
-			VpcID:    "9bb2d7d0-a017-4018-a212-a3d6b38e4ec9",
-			SubnetID: "63e3909a-dfae-4b8e-8090-3269c5d2a2da",
+			SiteID:         "8a880c71-fe4b-4e43-9e24-ebfcb8a84c5f",
+			TenantID:       "b013708a-99f0-47b2-a630-cabb4ae1d3df",
+			InstanceTypeID: "d4e5f6a7-b8c9-4d0e-a1f2-346789abcdef",
+			VpcID:          "9bb2d7d0-a017-4018-a212-a3d6b38e4ec9",
+			SubnetID:       "63e3909a-dfae-4b8e-8090-3269c5d2a2da",
 			CredentialsSecret: v1beta1.CredentialsSecretReference{
 				Name:      secret.Name,
 				Namespace: namespace.Name,

@@ -97,6 +97,11 @@ type NvidiaCarbideMachineProviderSpec struct {
 	// +optional
 	AlwaysBootWithCustomIpxe bool `json:"alwaysBootWithCustomIpxe,omitempty"`
 
+	// DpuExtensionServices specifies DPU Extension Services to deploy after instance creation.
+	// These are deployed via an UpdateInstance call with DpuExtensionServiceDeployments.
+	// +optional
+	DpuExtensionServices []DpuExtensionServiceSpec `json:"dpuExtensionServices,omitempty"`
+
 	// CredentialsSecret references a secret containing NVIDIA Carbide API credentials
 	// The secret must contain: endpoint, orgName, token
 	// +required
@@ -183,6 +188,17 @@ type InfiniBandInterfaceSpec struct {
 	// DeviceInstance is the device index
 	// +optional
 	DeviceInstance *int32 `json:"deviceInstance,omitempty"`
+}
+
+// DpuExtensionServiceSpec defines a DPU Extension Service to deploy on the instance
+type DpuExtensionServiceSpec struct {
+	// ServiceID is the UUID of the DPU Extension Service to deploy
+	// +required
+	ServiceID string `json:"serviceId"`
+
+	// Version is the version of the DPU Extension Service to deploy
+	// +optional
+	Version string `json:"version,omitempty"`
 }
 
 // NVLinkInterfaceSpec defines an NVLink interface attachment
