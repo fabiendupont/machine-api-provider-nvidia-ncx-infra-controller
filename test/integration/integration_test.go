@@ -162,6 +162,18 @@ func (m *mockNvidiaCarbideClient) GetMachine(
 	return nil, mockHTTPResponse(404), nil
 }
 
+func (m *mockNvidiaCarbideClient) GetCurrentTenant(
+	ctx context.Context, org string,
+) (*bmm.Tenant, *http.Response, error) {
+	return nil, mockHTTPResponse(200), nil
+}
+
+func (m *mockNvidiaCarbideClient) GetInstanceStatusHistory(
+	ctx context.Context, org string, instanceId string,
+) ([]bmm.StatusDetail, *http.Response, error) {
+	return nil, mockHTTPResponse(200), nil
+}
+
 var _ = Describe("Machine Actuator Integration", func() {
 	var (
 		namespace *corev1.Namespace

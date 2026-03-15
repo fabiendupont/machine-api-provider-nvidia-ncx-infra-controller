@@ -46,6 +46,8 @@ type NvidiaCarbideClientInterface interface {
 	GetInstance(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error)
 	DeleteInstance(ctx context.Context, org string, instanceId string) (*http.Response, error)
 	GetMachine(ctx context.Context, org string, machineId string) (*bmm.Machine, *http.Response, error)
+	GetCurrentTenant(ctx context.Context, org string) (*bmm.Tenant, *http.Response, error)
+	GetInstanceStatusHistory(ctx context.Context, org string, instanceId string) ([]bmm.StatusDetail, *http.Response, error)
 }
 
 // carbideClient wraps the SDK APIClient and injects auth context
@@ -78,6 +80,18 @@ func (c *carbideClient) GetMachine(
 	ctx context.Context, org, machineId string,
 ) (*bmm.Machine, *http.Response, error) {
 	return c.client.MachineAPI.GetMachine(c.authCtx(ctx), org, machineId).Execute()
+}
+
+func (c *carbideClient) GetCurrentTenant(
+	ctx context.Context, org string,
+) (*bmm.Tenant, *http.Response, error) {
+	return c.client.TenantAPI.GetCurrentTenant(c.authCtx(ctx), org).Execute()
+}
+
+func (c *carbideClient) GetInstanceStatusHistory(
+	ctx context.Context, org, instanceId string,
+) ([]bmm.StatusDetail, *http.Response, error) {
+	return c.client.InstanceAPI.GetInstanceStatusHistory(c.authCtx(ctx), org, instanceId).Execute()
 }
 
 // Actuator implements the OpenShift Machine actuator interface
@@ -194,6 +208,13 @@ func buildInstanceRequest(
 	if providerSpec.NetworkSecurityGroupID != "" {
 		req.NetworkSecurityGroupId = *bmm.NewNullableString(&providerSpec.NetworkSecurityGroupID)
 	}
+	if providerSpec.Description != "" {
+		desc := providerSpec.Description
+		req.Description = *bmm.NewNullableString(&desc)
+	}
+	if providerSpec.AlwaysBootWithCustomIpxe {
+		req.AlwaysBootWithCustomIpxe = ptr(true)
+	}
 	if len(providerSpec.InfiniBandInterfaces) > 0 {
 		ibInterfaces := make([]bmm.InfiniBandInterfaceCreateRequest, 0, len(providerSpec.InfiniBandInterfaces))
 		for _, ib := range providerSpec.InfiniBandInterfaces {
@@ -257,6 +278,16 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	nvidiaCarbideClient, orgName, err := a.getNvidiaCarbideClient(ctx, providerSpec)
 	if err != nil {
 		return fmt.Errorf("failed to create NVIDIA Carbide client: %w", err)
+	}
+
+	// Validate tenant capabilities for targeted provisioning
+	if providerSpec.MachineID != "" {
+		tenant, _, tenantErr := nvidiaCarbideClient.GetCurrentTenant(ctx, orgName)
+		if tenantErr == nil && tenant != nil && tenant.Capabilities != nil {
+			if tenant.Capabilities.TargetedInstanceCreation != nil && !*tenant.Capabilities.TargetedInstanceCreation {
+				return fmt.Errorf("tenant does not have targeted instance creation enabled; cannot use machineId")
+			}
+		}
 	}
 
 	// Build instance request

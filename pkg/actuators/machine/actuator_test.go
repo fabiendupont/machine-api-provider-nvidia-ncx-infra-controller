@@ -65,6 +65,14 @@ func (m *mockCarbideClient) GetMachine(ctx context.Context, org string, machineI
 	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
 
+func (m *mockCarbideClient) GetCurrentTenant(ctx context.Context, org string) (*bmm.Tenant, *http.Response, error) {
+	return nil, &http.Response{StatusCode: 200}, nil
+}
+
+func (m *mockCarbideClient) GetInstanceStatusHistory(ctx context.Context, org string, instanceId string) ([]bmm.StatusDetail, *http.Response, error) {
+	return nil, &http.Response{StatusCode: 200}, nil
+}
+
 func newTestActuator(mock *mockCarbideClient) (*Actuator, *record.FakeRecorder) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)

@@ -88,6 +88,15 @@ type NvidiaCarbideMachineProviderSpec struct {
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 
+	// Description for the NVIDIA Carbide instance
+	// +optional
+	Description string `json:"description,omitempty"`
+
+	// AlwaysBootWithCustomIpxe when true, the iPXE script will always run on reboot.
+	// Requires the OS to be of iPXE type.
+	// +optional
+	AlwaysBootWithCustomIpxe bool `json:"alwaysBootWithCustomIpxe,omitempty"`
+
 	// CredentialsSecret references a secret containing NVIDIA Carbide API credentials
 	// The secret must contain: endpoint, orgName, token
 	// +required
