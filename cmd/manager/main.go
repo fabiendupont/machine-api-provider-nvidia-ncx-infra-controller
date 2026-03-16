@@ -52,13 +52,24 @@ func main() {
 	var probeAddr string
 	var webhookPort int
 	var enableLeaderElection bool
+	var enableWebhooks bool
+	var webhookCertDir string
 
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.IntVar(&webhookPort, "webhook-port", 9443, "The port the webhook server binds to.")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
+		"The address the metric endpoint binds to.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081",
+		"The address the probe endpoint binds to.")
+	flag.IntVar(&webhookPort, "webhook-port", 9443,
+		"The port the webhook server binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.BoolVar(&enableWebhooks, "enable-webhooks", true,
+		"Enable validating webhooks. Requires TLS certificates "+
+			"to be provisioned (e.g. via cert-manager).")
+	flag.StringVar(&webhookCertDir, "webhook-cert-dir",
+		"/tmp/k8s-webhook-server/serving-certs",
+		"Directory containing TLS certificates for the webhook server.")
 
 	opts := zap.Options{
 		Development: false,
@@ -68,7 +79,7 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgrOpts := ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
@@ -76,10 +87,26 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "machine-controller.nvidia-carbide.nvidia.com",
-		WebhookServer: webhook.NewServer(webhook.Options{
-			Port: webhookPort,
-		}),
-	})
+	}
+
+	// Only configure the webhook server when webhooks are enabled
+	// and TLS certificates are available.
+	if enableWebhooks {
+		if _, err := os.Stat(webhookCertDir); os.IsNotExist(err) {
+			setupLog.Info(
+				"Webhook cert directory not found, disabling webhooks",
+				"certDir", webhookCertDir,
+			)
+			enableWebhooks = false
+		} else {
+			mgrOpts.WebhookServer = webhook.NewServer(webhook.Options{
+				Port:    webhookPort,
+				CertDir: webhookCertDir,
+			})
+		}
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOpts)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
@@ -101,14 +128,19 @@ func main() {
 	// This provider only needs to implement the Machine actuator interface.
 
 	// Register validating webhook for Machine objects
-	mgr.GetWebhookServer().Register(
-		"/validate-machine",
-		&admission.Webhook{
-			Handler: &ncpv1beta1.MachineValidator{
-				Decoder: admission.NewDecoder(scheme),
+	if enableWebhooks {
+		mgr.GetWebhookServer().Register(
+			"/validate-machine",
+			&admission.Webhook{
+				Handler: &ncpv1beta1.MachineValidator{
+					Decoder: admission.NewDecoder(scheme),
+				},
 			},
-		},
-	)
+		)
+		setupLog.Info("Webhooks enabled", "port", webhookPort)
+	} else {
+		setupLog.Info("Webhooks disabled")
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
