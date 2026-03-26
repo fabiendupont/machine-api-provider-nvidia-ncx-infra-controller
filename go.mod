@@ -3,8 +3,8 @@ module github.com/fabiendupont/machine-api-provider-nvidia-carbide
 go 1.25.4
 
 require (
+	github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
-	github.com/nvidia/bare-metal-manager-rest/sdk/standard v0.0.0-00010101000000-000000000000
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	github.com/openshift/api v0.0.0-20240830023148-b7d0481c9094
@@ -76,5 +76,6 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-// Pseudo-version until upstream tags the sdk/standard sub-module
-replace github.com/nvidia/bare-metal-manager-rest/sdk/standard => github.com/nvidia/bare-metal-manager-rest/sdk/standard v0.0.0-20260312230854-b38c365f5a3a
+// Local replace until upstream merges the chore/sdk-go-module branch and tags
+// the sdk/standard sub-module.
+replace github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard => ../../NVIDIA/ncx-infra-controller-rest/sdk/standard

@@ -51,24 +51,24 @@ The provider translates OpenShift Machine API requests into NVIDIA Carbide REST 
 
 ## Dependencies
 
-- **[github.com/NVIDIA/bare-metal-manager-rest/sdk/standard](https://github.com/NVIDIA/bare-metal-manager-rest)** - Auto-generated REST API client (SDK)
+- **[github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard](https://github.com/NVIDIA/ncx-infra-controller-rest)** - Auto-generated REST API client (SDK)
 - **[github.com/openshift/api](https://github.com/openshift/api)** - OpenShift Machine API types
 - **OpenShift 4.14+** or compatible Machine API implementation
 
 ### SDK Dependency Note
 
-The Carbide REST SDK (`github.com/nvidia/bare-metal-manager-rest/sdk/standard`) does not
+The NCX Infra Controller REST SDK (`github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard`) does not
 yet have tagged releases for its `sdk/standard` sub-module. Until upstream tags the module,
-`go.mod` uses a `replace` directive pointing to a specific commit:
+`go.mod` uses a local `replace` directive pointing to a sibling checkout:
 
 ```
-replace github.com/nvidia/bare-metal-manager-rest/sdk/standard => github.com/nvidia/bare-metal-manager-rest/sdk/standard v0.0.0-20260312230854-b38c365f5a3a
+replace github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard => ../../NVIDIA/ncx-infra-controller-rest/sdk/standard
 ```
 
 **Why this is necessary:** Go modules require each sub-module (`sdk/standard/` lives
-under the parent `bare-metal-manager-rest` repository) to have its own `go.mod` with
-a tagged version. The upstream repository has not yet tagged the `sdk/standard`
-sub-module, so `go get` cannot resolve it without the replace directive.
+under the parent `ncx-infra-controller-rest` repository) to have its own `go.mod` with
+a tagged version. The upstream repository has the `go.mod` on the `chore/sdk-go-module`
+branch, which must be cherry-picked into your local checkout until it is merged to main.
 
 **Tracking:** Monitor the upstream repository for a tagged release of the
 `sdk/standard` sub-module (e.g., `sdk/standard/v0.1.0`). When available, remove the

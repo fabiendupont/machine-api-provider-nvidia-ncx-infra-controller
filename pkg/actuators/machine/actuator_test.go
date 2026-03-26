@@ -36,7 +36,7 @@ import (
 
 	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
 	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/providerid"
-	bmm "github.com/nvidia/bare-metal-manager-rest/sdk/standard"
+	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
 )
 
 const testInstanceID = "test-instance-id"
@@ -44,49 +44,49 @@ const testInstanceID = "test-instance-id"
 // mockCarbideClient implements NvidiaCarbideClientInterface for testing
 type mockCarbideClient struct {
 	createInstance func(
-		ctx context.Context, org string, req bmm.InstanceCreateRequest,
-	) (*bmm.Instance, *http.Response, error)
+		ctx context.Context, org string, req nico.InstanceCreateRequest,
+	) (*nico.Instance, *http.Response, error)
 	getInstance func(
 		ctx context.Context, org string, instanceId string,
-	) (*bmm.Instance, *http.Response, error)
+	) (*nico.Instance, *http.Response, error)
 	deleteInstance func(
 		ctx context.Context, org string, instanceId string,
-		deleteReq *bmm.InstanceDeleteRequest,
+		deleteReq *nico.InstanceDeleteRequest,
 	) (*http.Response, error)
 	getMachine func(
 		ctx context.Context, org string, machineId string,
-	) (*bmm.Machine, *http.Response, error)
+	) (*nico.Machine, *http.Response, error)
 	updateInstance func(
 		ctx context.Context, org string, instanceId string,
-		req bmm.InstanceUpdateRequest,
-	) (*bmm.Instance, *http.Response, error)
+		req nico.InstanceUpdateRequest,
+	) (*nico.Instance, *http.Response, error)
 	getInstanceStatusHistory func(
 		ctx context.Context, org string, instanceId string,
-	) ([]bmm.StatusDetail, *http.Response, error)
+	) ([]nico.StatusDetail, *http.Response, error)
 }
 
 func (m *mockCarbideClient) CreateInstance(
-	ctx context.Context, org string, req bmm.InstanceCreateRequest,
-) (*bmm.Instance, *http.Response, error) {
+	ctx context.Context, org string, req nico.InstanceCreateRequest,
+) (*nico.Instance, *http.Response, error) {
 	return m.createInstance(ctx, org, req)
 }
 
 func (m *mockCarbideClient) GetInstance(
 	ctx context.Context, org string, instanceId string,
-) (*bmm.Instance, *http.Response, error) {
+) (*nico.Instance, *http.Response, error) {
 	return m.getInstance(ctx, org, instanceId)
 }
 
 func (m *mockCarbideClient) DeleteInstance(
 	ctx context.Context, org string, instanceId string,
-	deleteReq *bmm.InstanceDeleteRequest,
+	deleteReq *nico.InstanceDeleteRequest,
 ) (*http.Response, error) {
 	return m.deleteInstance(ctx, org, instanceId, deleteReq)
 }
 
 func (m *mockCarbideClient) GetMachine(
 	ctx context.Context, org string, machineId string,
-) (*bmm.Machine, *http.Response, error) {
+) (*nico.Machine, *http.Response, error) {
 	if m.getMachine != nil {
 		return m.getMachine(ctx, org, machineId)
 	}
@@ -95,13 +95,13 @@ func (m *mockCarbideClient) GetMachine(
 
 func (m *mockCarbideClient) GetCurrentTenant(
 	ctx context.Context, org string,
-) (*bmm.Tenant, *http.Response, error) {
+) (*nico.Tenant, *http.Response, error) {
 	return nil, &http.Response{StatusCode: 200}, nil
 }
 
 func (m *mockCarbideClient) GetInstanceStatusHistory(
 	ctx context.Context, org string, instanceId string,
-) ([]bmm.StatusDetail, *http.Response, error) {
+) ([]nico.StatusDetail, *http.Response, error) {
 	if m.getInstanceStatusHistory != nil {
 		return m.getInstanceStatusHistory(ctx, org, instanceId)
 	}
@@ -110,8 +110,8 @@ func (m *mockCarbideClient) GetInstanceStatusHistory(
 
 func (m *mockCarbideClient) UpdateInstance(
 	ctx context.Context, org string, instanceId string,
-	req bmm.InstanceUpdateRequest,
-) (*bmm.Instance, *http.Response, error) {
+	req nico.InstanceUpdateRequest,
+) (*nico.Instance, *http.Response, error) {
 	if m.updateInstance != nil {
 		return m.updateInstance(ctx, org, instanceId, req)
 	}
@@ -149,14 +149,14 @@ func newTestActuatorWithMachine(
 	return actuator, recorder
 }
 
-func testInstance(id string) *bmm.Instance {
-	status := bmm.INSTANCESTATUS_PROVISIONING
-	machineId := bmm.NewNullableString(ptr("machine-123"))
-	return &bmm.Instance{
+func testInstance(id string) *nico.Instance {
+	status := nico.INSTANCESTATUS_PROVISIONING
+	machineId := nico.NewNullableString(ptr("machine-123"))
+	return &nico.Instance{
 		Id:        &id,
 		Status:    &status,
 		MachineId: *machineId,
-		Interfaces: []bmm.Interface{
+		Interfaces: []nico.Interface{
 			{
 				IpAddresses: []string{"10.0.0.1"},
 			},
@@ -225,8 +225,8 @@ func TestCreate_Success(t *testing.T) {
 	instanceID := uuid.New().String()
 	mock := &mockCarbideClient{
 		createInstance: func(
-			ctx context.Context, org string, req bmm.InstanceCreateRequest,
-		) (*bmm.Instance, *http.Response, error) {
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
 			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
 		},
 	}
@@ -243,8 +243,8 @@ func TestCreate_Success(t *testing.T) {
 func TestCreate_APIError(t *testing.T) {
 	mock := &mockCarbideClient{
 		createInstance: func(
-			ctx context.Context, org string, req bmm.InstanceCreateRequest,
-		) (*bmm.Instance, *http.Response, error) {
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
 			return nil, nil, fmt.Errorf("connection refused")
 		},
 	}
@@ -262,8 +262,8 @@ func TestCreate_InvalidSpec(t *testing.T) {
 	createCalled := false
 	mock := &mockCarbideClient{
 		createInstance: func(
-			ctx context.Context, org string, req bmm.InstanceCreateRequest,
-		) (*bmm.Instance, *http.Response, error) {
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
 			createCalled = true
 			return nil, nil, nil
 		},
@@ -302,7 +302,7 @@ func TestCreate_MissingRequiredFields(t *testing.T) {
 
 func TestExists_TransientError(t *testing.T) {
 	mock := &mockCarbideClient{
-		getInstance: func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error) {
+		getInstance: func(ctx context.Context, org string, instanceId string) (*nico.Instance, *http.Response, error) {
 			return nil, nil, fmt.Errorf("connection timeout")
 		},
 	}
@@ -324,7 +324,7 @@ func TestExists_TransientError(t *testing.T) {
 
 func TestExists_NotFound(t *testing.T) {
 	mock := &mockCarbideClient{
-		getInstance: func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error) {
+		getInstance: func(ctx context.Context, org string, instanceId string) (*nico.Instance, *http.Response, error) {
 			return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 		},
 	}
@@ -346,7 +346,7 @@ func TestExists_NotFound(t *testing.T) {
 
 func TestExists_InstanceExists(t *testing.T) {
 	mock := &mockCarbideClient{
-		getInstance: func(ctx context.Context, org string, instanceId string) (*bmm.Instance, *http.Response, error) {
+		getInstance: func(ctx context.Context, org string, instanceId string) (*nico.Instance, *http.Response, error) {
 			return testInstance(instanceId), &http.Response{StatusCode: 200}, nil
 		},
 	}
@@ -384,7 +384,7 @@ func TestDelete_AlreadyDeleted(t *testing.T) {
 	mock := &mockCarbideClient{
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
-			deleteReq *bmm.InstanceDeleteRequest,
+			deleteReq *nico.InstanceDeleteRequest,
 		) (*http.Response, error) {
 			return &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 		},
@@ -406,7 +406,7 @@ func TestDelete_Success(t *testing.T) {
 	mock := &mockCarbideClient{
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
-			deleteReq *bmm.InstanceDeleteRequest,
+			deleteReq *nico.InstanceDeleteRequest,
 		) (*http.Response, error) {
 			return &http.Response{StatusCode: 200}, nil
 		},
@@ -536,22 +536,22 @@ func TestUpdate_StateTracking(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		status         bmm.InstanceStatus
+		status         nico.InstanceStatus
 		expectReady    bool
 		expectCondType string
 	}{
-		{"Pending", bmm.INSTANCESTATUS_PENDING, false, "InstanceAllocating"},
-		{"Provisioning", bmm.INSTANCESTATUS_PROVISIONING, false, "InstanceProvisioning"},
-		{"Configuring", bmm.INSTANCESTATUS_CONFIGURING, false, "InstanceBootstrapping"},
-		{"Ready", bmm.INSTANCESTATUS_READY, true, "InstanceReady"},
-		{"Terminating", bmm.INSTANCESTATUS_TERMINATING, false, "InstanceTerminating"},
-		{"Error", bmm.INSTANCESTATUS_ERROR, false, "InstanceError"},
+		{"Pending", nico.INSTANCESTATUS_PENDING, false, "InstanceAllocating"},
+		{"Provisioning", nico.INSTANCESTATUS_PROVISIONING, false, "InstanceProvisioning"},
+		{"Configuring", nico.INSTANCESTATUS_CONFIGURING, false, "InstanceBootstrapping"},
+		{"Ready", nico.INSTANCESTATUS_READY, true, "InstanceReady"},
+		{"Terminating", nico.INSTANCESTATUS_TERMINATING, false, "InstanceTerminating"},
+		{"Error", nico.INSTANCESTATUS_ERROR, false, "InstanceError"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := &mockCarbideClient{
-				getInstance: func(ctx context.Context, org string, id string) (*bmm.Instance, *http.Response, error) {
+				getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 					inst := testInstance(instanceID)
 					inst.Status = tt.status.Ptr()
 					return inst, &http.Response{StatusCode: 200}, nil
@@ -577,15 +577,15 @@ func TestUpdate_HealthIntegration(t *testing.T) {
 	machineID := "machine-123"
 
 	mock := &mockCarbideClient{
-		getInstance: func(ctx context.Context, org string, id string) (*bmm.Instance, *http.Response, error) {
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			return inst, &http.Response{StatusCode: 200}, nil
 		},
-		getMachine: func(ctx context.Context, org string, mid string) (*bmm.Machine, *http.Response, error) {
-			return &bmm.Machine{
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
 				Id: &machineID,
-				Health: &bmm.MachineHealth{
-					Alerts: []bmm.MachineHealthProbeAlert{
+				Health: &nico.MachineHealth{
+					Alerts: []nico.MachineHealthProbeAlert{
 						{},
 					},
 				},
@@ -610,15 +610,15 @@ func TestUpdate_HealthyMachine(t *testing.T) {
 	machineID := "machine-123"
 
 	mock := &mockCarbideClient{
-		getInstance: func(ctx context.Context, org string, id string) (*bmm.Instance, *http.Response, error) {
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			return inst, &http.Response{StatusCode: 200}, nil
 		},
-		getMachine: func(ctx context.Context, org string, mid string) (*bmm.Machine, *http.Response, error) {
-			return &bmm.Machine{
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
 				Id: &machineID,
-				Health: &bmm.MachineHealth{
-					Alerts: []bmm.MachineHealthProbeAlert{},
+				Health: &nico.MachineHealth{
+					Alerts: []nico.MachineHealthProbeAlert{},
 				},
 			}, &http.Response{StatusCode: 200}, nil
 		},
@@ -659,11 +659,11 @@ func createTypedTestMachineWithStatus(
 }
 
 func TestDelete_MHCRemediation(t *testing.T) {
-	var capturedDeleteReq *bmm.InstanceDeleteRequest
+	var capturedDeleteReq *nico.InstanceDeleteRequest
 	mock := &mockCarbideClient{
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
-			deleteReq *bmm.InstanceDeleteRequest,
+			deleteReq *nico.InstanceDeleteRequest,
 		) (*http.Response, error) {
 			capturedDeleteReq = deleteReq
 			return &http.Response{StatusCode: 200}, nil
@@ -696,11 +696,11 @@ func TestDelete_MHCRemediation(t *testing.T) {
 }
 
 func TestDelete_NoMHCRemediation(t *testing.T) {
-	var capturedDeleteReq *bmm.InstanceDeleteRequest
+	var capturedDeleteReq *nico.InstanceDeleteRequest
 	mock := &mockCarbideClient{
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
-			deleteReq *bmm.InstanceDeleteRequest,
+			deleteReq *nico.InstanceDeleteRequest,
 		) (*http.Response, error) {
 			capturedDeleteReq = deleteReq
 			return &http.Response{StatusCode: 200}, nil
@@ -724,22 +724,22 @@ func TestDelete_NoMHCRemediation(t *testing.T) {
 
 func TestUpdate_StatusHistoryOnError(t *testing.T) {
 	instanceID := uuid.New().String()
-	errorStatus := bmm.INSTANCESTATUS_ERROR
+	errorStatus := nico.INSTANCESTATUS_ERROR
 
 	mock := &mockCarbideClient{
-		getInstance: func(ctx context.Context, org string, id string) (*bmm.Instance, *http.Response, error) {
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			inst.Status = &errorStatus
 			return inst, &http.Response{StatusCode: 200}, nil
 		},
 		getInstanceStatusHistory: func(
 			ctx context.Context, org string, id string,
-		) ([]bmm.StatusDetail, *http.Response, error) {
+		) ([]nico.StatusDetail, *http.Response, error) {
 			now := time.Now()
 			errorMsg := "Machine allocation failed"
-			errorStr := string(bmm.INSTANCESTATUS_ERROR)
-			provStr := string(bmm.INSTANCESTATUS_PROVISIONING)
-			return []bmm.StatusDetail{
+			errorStr := string(nico.INSTANCESTATUS_ERROR)
+			provStr := string(nico.INSTANCESTATUS_PROVISIONING)
+			return []nico.StatusDetail{
 				{Status: &provStr, Created: &now},
 				{Status: &errorStr, Message: &errorMsg, Created: &now},
 			}, &http.Response{StatusCode: 200}, nil
@@ -773,14 +773,14 @@ func TestCreate_WithDpuExtensionServices(t *testing.T) {
 	updateCalled := false
 	mock := &mockCarbideClient{
 		createInstance: func(
-			ctx context.Context, org string, req bmm.InstanceCreateRequest,
-		) (*bmm.Instance, *http.Response, error) {
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
 			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
 		},
 		updateInstance: func(
 			ctx context.Context, org string, id string,
-			req bmm.InstanceUpdateRequest,
-		) (*bmm.Instance, *http.Response, error) {
+			req nico.InstanceUpdateRequest,
+		) (*nico.Instance, *http.Response, error) {
 			updateCalled = true
 			if len(req.DpuExtensionServiceDeployments) != 1 {
 				t.Errorf("Expected 1 DPU deployment, got %d", len(req.DpuExtensionServiceDeployments))

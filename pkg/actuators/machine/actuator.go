@@ -38,61 +38,61 @@ import (
 	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
 	carbidemetrics "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/metrics"
 	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/providerid"
-	bmm "github.com/nvidia/bare-metal-manager-rest/sdk/standard"
+	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
 )
 
 // NvidiaCarbideClientInterface defines the methods needed from NVIDIA Carbide REST client
 type NvidiaCarbideClientInterface interface {
 	CreateInstance(
-		ctx context.Context, org string, req bmm.InstanceCreateRequest,
-	) (*bmm.Instance, *http.Response, error)
+		ctx context.Context, org string, req nico.InstanceCreateRequest,
+	) (*nico.Instance, *http.Response, error)
 	GetInstance(
 		ctx context.Context, org string, instanceId string,
-	) (*bmm.Instance, *http.Response, error)
+	) (*nico.Instance, *http.Response, error)
 	DeleteInstance(
 		ctx context.Context, org string, instanceId string,
-		deleteReq *bmm.InstanceDeleteRequest,
+		deleteReq *nico.InstanceDeleteRequest,
 	) (*http.Response, error)
 	UpdateInstance(
 		ctx context.Context, org string, instanceId string,
-		req bmm.InstanceUpdateRequest,
-	) (*bmm.Instance, *http.Response, error)
+		req nico.InstanceUpdateRequest,
+	) (*nico.Instance, *http.Response, error)
 	GetMachine(
 		ctx context.Context, org string, machineId string,
-	) (*bmm.Machine, *http.Response, error)
+	) (*nico.Machine, *http.Response, error)
 	GetCurrentTenant(
 		ctx context.Context, org string,
-	) (*bmm.Tenant, *http.Response, error)
+	) (*nico.Tenant, *http.Response, error)
 	GetInstanceStatusHistory(
 		ctx context.Context, org string, instanceId string,
-	) ([]bmm.StatusDetail, *http.Response, error)
+	) ([]nico.StatusDetail, *http.Response, error)
 }
 
 // carbideClient wraps the SDK APIClient and injects auth context
 type carbideClient struct {
-	client *bmm.APIClient
+	client *nico.APIClient
 	token  string
 }
 
 func (c *carbideClient) authCtx(ctx context.Context) context.Context {
-	return context.WithValue(ctx, bmm.ContextAccessToken, c.token)
+	return context.WithValue(ctx, nico.ContextAccessToken, c.token)
 }
 
 func (c *carbideClient) CreateInstance(
-	ctx context.Context, org string, req bmm.InstanceCreateRequest,
-) (*bmm.Instance, *http.Response, error) {
+	ctx context.Context, org string, req nico.InstanceCreateRequest,
+) (*nico.Instance, *http.Response, error) {
 	return c.client.InstanceAPI.CreateInstance(c.authCtx(ctx), org).InstanceCreateRequest(req).Execute()
 }
 
 func (c *carbideClient) GetInstance(
 	ctx context.Context, org, instanceId string,
-) (*bmm.Instance, *http.Response, error) {
+) (*nico.Instance, *http.Response, error) {
 	return c.client.InstanceAPI.GetInstance(c.authCtx(ctx), org, instanceId).Execute()
 }
 
 func (c *carbideClient) DeleteInstance(
 	ctx context.Context, org, instanceId string,
-	deleteReq *bmm.InstanceDeleteRequest,
+	deleteReq *nico.InstanceDeleteRequest,
 ) (*http.Response, error) {
 	r := c.client.InstanceAPI.DeleteInstance(c.authCtx(ctx), org, instanceId)
 	if deleteReq != nil {
@@ -103,8 +103,8 @@ func (c *carbideClient) DeleteInstance(
 
 func (c *carbideClient) UpdateInstance(
 	ctx context.Context, org, instanceId string,
-	req bmm.InstanceUpdateRequest,
-) (*bmm.Instance, *http.Response, error) {
+	req nico.InstanceUpdateRequest,
+) (*nico.Instance, *http.Response, error) {
 	return c.client.InstanceAPI.UpdateInstance(
 		c.authCtx(ctx), org, instanceId,
 	).InstanceUpdateRequest(req).Execute()
@@ -112,19 +112,19 @@ func (c *carbideClient) UpdateInstance(
 
 func (c *carbideClient) GetMachine(
 	ctx context.Context, org, machineId string,
-) (*bmm.Machine, *http.Response, error) {
+) (*nico.Machine, *http.Response, error) {
 	return c.client.MachineAPI.GetMachine(c.authCtx(ctx), org, machineId).Execute()
 }
 
 func (c *carbideClient) GetCurrentTenant(
 	ctx context.Context, org string,
-) (*bmm.Tenant, *http.Response, error) {
+) (*nico.Tenant, *http.Response, error) {
 	return c.client.TenantAPI.GetCurrentTenant(c.authCtx(ctx), org).Execute()
 }
 
 func (c *carbideClient) GetInstanceStatusHistory(
 	ctx context.Context, org, instanceId string,
-) ([]bmm.StatusDetail, *http.Response, error) {
+) ([]nico.StatusDetail, *http.Response, error) {
 	return c.client.InstanceAPI.GetInstanceStatusHistory(c.authCtx(ctx), org, instanceId).Execute()
 }
 
@@ -191,8 +191,8 @@ func validateProviderSpec(spec *v1beta1.NvidiaCarbideMachineProviderSpec) error 
 func buildInstanceRequest(
 	name string,
 	providerSpec *v1beta1.NvidiaCarbideMachineProviderSpec,
-) bmm.InstanceCreateRequest {
-	interfaces := []bmm.InterfaceCreateRequest{
+) nico.InstanceCreateRequest {
+	interfaces := []nico.InterfaceCreateRequest{
 		{
 			SubnetId:   &providerSpec.SubnetID,
 			IsPhysical: ptr(false),
@@ -201,13 +201,13 @@ func buildInstanceRequest(
 
 	for _, additionalSubnet := range providerSpec.AdditionalSubnetIDs {
 		subnetID := additionalSubnet.SubnetID
-		interfaces = append(interfaces, bmm.InterfaceCreateRequest{
+		interfaces = append(interfaces, nico.InterfaceCreateRequest{
 			SubnetId:   &subnetID,
 			IsPhysical: ptr(additionalSubnet.IsPhysical),
 		})
 	}
 
-	req := bmm.InstanceCreateRequest{
+	req := nico.InstanceCreateRequest{
 		Name:             name,
 		TenantId:         providerSpec.TenantID,
 		VpcId:            providerSpec.VpcID,
@@ -226,14 +226,14 @@ func buildInstanceRequest(
 	}
 	if providerSpec.UserData != "" {
 		userData := providerSpec.UserData
-		req.UserData = *bmm.NewNullableString(&userData)
+		req.UserData = *nico.NewNullableString(&userData)
 	}
 	// The API requires either ipxeScript or operatingSystemId.
 	if providerSpec.OperatingSystemID != "" {
-		req.OperatingSystemId = *bmm.NewNullableString(&providerSpec.OperatingSystemID)
+		req.OperatingSystemId = *nico.NewNullableString(&providerSpec.OperatingSystemID)
 	} else {
 		ipxeScript := "#!ipxe\necho Booting via Carbide"
-		req.IpxeScript = *bmm.NewNullableString(&ipxeScript)
+		req.IpxeScript = *nico.NewNullableString(&ipxeScript)
 	}
 	if len(providerSpec.SSHKeyGroupIDs) > 0 {
 		req.SshKeyGroupIds = providerSpec.SSHKeyGroupIDs
@@ -242,19 +242,19 @@ func buildInstanceRequest(
 		req.Labels = providerSpec.Labels
 	}
 	if providerSpec.NetworkSecurityGroupID != "" {
-		req.NetworkSecurityGroupId = *bmm.NewNullableString(&providerSpec.NetworkSecurityGroupID)
+		req.NetworkSecurityGroupId = *nico.NewNullableString(&providerSpec.NetworkSecurityGroupID)
 	}
 	if providerSpec.Description != "" {
 		desc := providerSpec.Description
-		req.Description = *bmm.NewNullableString(&desc)
+		req.Description = *nico.NewNullableString(&desc)
 	}
 	if providerSpec.AlwaysBootWithCustomIpxe {
 		req.AlwaysBootWithCustomIpxe = ptr(true)
 	}
 	if len(providerSpec.InfiniBandInterfaces) > 0 {
-		ibInterfaces := make([]bmm.InfiniBandInterfaceCreateRequest, 0, len(providerSpec.InfiniBandInterfaces))
+		ibInterfaces := make([]nico.InfiniBandInterfaceCreateRequest, 0, len(providerSpec.InfiniBandInterfaces))
 		for _, ib := range providerSpec.InfiniBandInterfaces {
-			ibReq := bmm.InfiniBandInterfaceCreateRequest{}
+			ibReq := nico.InfiniBandInterfaceCreateRequest{}
 			if ib.PartitionID != "" {
 				ibReq.PartitionId = &ib.PartitionID
 			}
@@ -272,9 +272,9 @@ func buildInstanceRequest(
 		req.InfinibandInterfaces = ibInterfaces
 	}
 	if len(providerSpec.NVLinkInterfaces) > 0 {
-		nvlInterfaces := make([]bmm.NVLinkInterfaceCreateRequest, 0, len(providerSpec.NVLinkInterfaces))
+		nvlInterfaces := make([]nico.NVLinkInterfaceCreateRequest, 0, len(providerSpec.NVLinkInterfaces))
 		for _, nvl := range providerSpec.NVLinkInterfaces {
-			nvlReq := bmm.NVLinkInterfaceCreateRequest{}
+			nvlReq := nico.NVLinkInterfaceCreateRequest{}
 			if nvl.NVLinkLogicalPartitionID != "" {
 				nvlReq.NvLinklogicalPartitionId = &nvl.NVLinkLogicalPartitionID
 			}
@@ -555,10 +555,10 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 	}
 
 	// Check if this deletion is triggered by MachineHealthCheck remediation
-	var deleteReq *bmm.InstanceDeleteRequest
+	var deleteReq *nico.InstanceDeleteRequest
 	if isMHCRemediation(machineObj) {
-		deleteReq = &bmm.InstanceDeleteRequest{
-			MachineHealthIssue: &bmm.MachineHealthIssue{
+		deleteReq = &nico.InstanceDeleteRequest{
+			MachineHealthIssue: &nico.MachineHealthIssue{
 				Category: ptr("MachineHealthCheck"),
 				Summary:  ptr("Node marked unhealthy by OpenShift MachineHealthCheck"),
 			},
@@ -760,13 +760,13 @@ func (a *Actuator) getNvidiaCarbideClient(
 	}
 
 	// Create NVIDIA Carbide API client
-	sdkCfg := bmm.NewConfiguration()
-	sdkCfg.Servers = bmm.ServerConfigurations{
+	sdkCfg := nico.NewConfiguration()
+	sdkCfg.Servers = nico.ServerConfigurations{
 		{URL: string(endpoint)},
 	}
 
 	return &carbideClient{
-		client: bmm.NewAPIClient(sdkCfg),
+		client: nico.NewAPIClient(sdkCfg),
 		token:  string(token),
 	}, string(orgName), nil
 }
@@ -781,16 +781,16 @@ func ptr[T any](v T) *T {
 // Ready, Updating, Rebooting, Terminating, Error.
 func setInstanceStateConditions(
 	providerStatus *v1beta1.NvidiaCarbideMachineProviderStatus,
-	status bmm.InstanceStatus,
+	status nico.InstanceStatus,
 ) {
 	switch status {
-	case bmm.INSTANCESTATUS_PENDING:
+	case nico.INSTANCESTATUS_PENDING:
 		setCondition(providerStatus, "InstanceAllocating", metav1.ConditionTrue,
 			"Pending", "Instance creation request sent, awaiting allocation")
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
 			"Pending", "Instance is pending allocation")
 
-	case bmm.INSTANCESTATUS_PROVISIONING:
+	case nico.INSTANCESTATUS_PROVISIONING:
 		setCondition(providerStatus, "InstanceAllocating", metav1.ConditionFalse,
 			"Allocated", "Instance has been allocated")
 		setCondition(providerStatus, "InstanceProvisioning", metav1.ConditionTrue,
@@ -798,7 +798,7 @@ func setInstanceStateConditions(
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
 			"Provisioning", "Instance is being provisioned")
 
-	case bmm.INSTANCESTATUS_CONFIGURING:
+	case nico.INSTANCESTATUS_CONFIGURING:
 		setCondition(providerStatus, "InstanceProvisioning", metav1.ConditionFalse,
 			"Provisioned", "Machine has been provisioned")
 		setCondition(providerStatus, "InstanceBootstrapping", metav1.ConditionTrue,
@@ -806,27 +806,27 @@ func setInstanceStateConditions(
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
 			"Configuring", "Instance is being configured")
 
-	case bmm.INSTANCESTATUS_READY:
+	case nico.INSTANCESTATUS_READY:
 		setCondition(providerStatus, "InstanceBootstrapping", metav1.ConditionFalse,
 			"Complete", "Bootstrap completed")
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionTrue,
 			"InstanceRunning", "Instance is fully operational")
 
-	case bmm.INSTANCESTATUS_UPDATING:
+	case nico.INSTANCESTATUS_UPDATING:
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
 			"Updating", "Instance is being updated")
 
-	case bmm.INSTANCESTATUS_REBOOTING:
+	case nico.INSTANCESTATUS_REBOOTING:
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
 			"Rebooting", "Instance is rebooting")
 
-	case bmm.INSTANCESTATUS_TERMINATING:
+	case nico.INSTANCESTATUS_TERMINATING:
 		setCondition(providerStatus, "InstanceTerminating", metav1.ConditionTrue,
 			"Terminating", "Instance deletion in progress")
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
 			"Terminating", "Instance is terminating")
 
-	case bmm.INSTANCESTATUS_ERROR:
+	case nico.INSTANCESTATUS_ERROR:
 		setCondition(providerStatus, "InstanceError", metav1.ConditionTrue,
 			"Error", "Instance is in a terminal error state")
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
@@ -900,11 +900,11 @@ func (a *Actuator) deployDpuExtensionServices(
 	providerSpec *v1beta1.NvidiaCarbideMachineProviderSpec,
 ) error {
 	dpuDeployments := make(
-		[]bmm.DpuExtensionServiceDeploymentRequest,
+		[]nico.DpuExtensionServiceDeploymentRequest,
 		0, len(providerSpec.DpuExtensionServices),
 	)
 	for _, svc := range providerSpec.DpuExtensionServices {
-		dpuReq := bmm.DpuExtensionServiceDeploymentRequest{
+		dpuReq := nico.DpuExtensionServiceDeploymentRequest{
 			DpuExtensionServiceId: &svc.ServiceID,
 		}
 		if svc.Version != "" {
@@ -912,7 +912,7 @@ func (a *Actuator) deployDpuExtensionServices(
 		}
 		dpuDeployments = append(dpuDeployments, dpuReq)
 	}
-	updateReq := bmm.InstanceUpdateRequest{
+	updateReq := nico.InstanceUpdateRequest{
 		DpuExtensionServiceDeployments: dpuDeployments,
 	}
 	_, updateResp, updateErr := nvidiaCarbideClient.UpdateInstance(
@@ -957,7 +957,7 @@ func (a *Actuator) checkStatusHistory(
 	nvidiaCarbideClient NvidiaCarbideClientInterface,
 	orgName string,
 	machineObj client.Object,
-	instance *bmm.Instance,
+	instance *nico.Instance,
 ) {
 	if instance.Status == nil || a.eventRecorder == nil {
 		return
@@ -965,9 +965,9 @@ func (a *Actuator) checkStatusHistory(
 
 	shouldFetch := false
 	switch *instance.Status {
-	case bmm.INSTANCESTATUS_ERROR:
+	case nico.INSTANCESTATUS_ERROR:
 		shouldFetch = true
-	case bmm.INSTANCESTATUS_PROVISIONING:
+	case nico.INSTANCESTATUS_PROVISIONING:
 		// Check if Provisioning for more than 5 minutes using status history
 		shouldFetch = true
 	default:
@@ -984,10 +984,10 @@ func (a *Actuator) checkStatusHistory(
 	}
 
 	// For Provisioning state, check if it's been stuck for more than the threshold
-	if *instance.Status == bmm.INSTANCESTATUS_PROVISIONING {
+	if *instance.Status == nico.INSTANCESTATUS_PROVISIONING {
 		stuck := false
 		for _, entry := range history {
-			if entry.Status != nil && *entry.Status == string(bmm.INSTANCESTATUS_PROVISIONING) && entry.Created != nil {
+			if entry.Status != nil && *entry.Status == string(nico.INSTANCESTATUS_PROVISIONING) && entry.Created != nil {
 				if time.Since(*entry.Created) > provisioningStuckThreshold {
 					stuck = true
 				}
@@ -1044,7 +1044,7 @@ func (a *Actuator) updateMachineHealth(
 	ctx context.Context,
 	nvidiaCarbideClient NvidiaCarbideClientInterface,
 	orgName string,
-	instance *bmm.Instance,
+	instance *nico.Instance,
 	providerStatus *v1beta1.NvidiaCarbideMachineProviderStatus,
 ) {
 	machineID, ok := instance.GetMachineIdOk()

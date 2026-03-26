@@ -42,7 +42,7 @@ import (
 
 	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/actuators/machine"
 	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
-	bmm "github.com/nvidia/bare-metal-manager-rest/sdk/standard"
+	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
 )
 
 var (
@@ -111,29 +111,29 @@ func mockHTTPResponse(statusCode int) *http.Response {
 // mockNvidiaCarbideClient for testing
 type mockNvidiaCarbideClient struct {
 	createInstanceFunc func(
-		ctx context.Context, org string, req bmm.InstanceCreateRequest,
-	) (*bmm.Instance, *http.Response, error)
+		ctx context.Context, org string, req nico.InstanceCreateRequest,
+	) (*nico.Instance, *http.Response, error)
 	getInstanceFunc func(
 		ctx context.Context, org string, instanceId string,
-	) (*bmm.Instance, *http.Response, error)
+	) (*nico.Instance, *http.Response, error)
 	deleteInstanceFunc func(
 		ctx context.Context, org string, instanceId string,
-		deleteReq *bmm.InstanceDeleteRequest,
+		deleteReq *nico.InstanceDeleteRequest,
 	) (*http.Response, error)
 	getMachineFunc func(
 		ctx context.Context, org string, machineId string,
-	) (*bmm.Machine, *http.Response, error)
+	) (*nico.Machine, *http.Response, error)
 }
 
 func (m *mockNvidiaCarbideClient) CreateInstance(
-	ctx context.Context, org string, req bmm.InstanceCreateRequest,
-) (*bmm.Instance, *http.Response, error) {
+	ctx context.Context, org string, req nico.InstanceCreateRequest,
+) (*nico.Instance, *http.Response, error) {
 	if m.createInstanceFunc != nil {
 		return m.createInstanceFunc(ctx, org, req)
 	}
 	// Default: return success
 	instanceID := uuid.New().String()
-	return &bmm.Instance{
+	return &nico.Instance{
 		Id:   &instanceID,
 		Name: &req.Name,
 	}, mockHTTPResponse(201), nil
@@ -141,18 +141,18 @@ func (m *mockNvidiaCarbideClient) CreateInstance(
 
 func (m *mockNvidiaCarbideClient) GetInstance(
 	ctx context.Context, org string, instanceId string,
-) (*bmm.Instance, *http.Response, error) {
+) (*nico.Instance, *http.Response, error) {
 	if m.getInstanceFunc != nil {
 		return m.getInstanceFunc(ctx, org, instanceId)
 	}
-	return &bmm.Instance{
+	return &nico.Instance{
 		Id:   &instanceId,
 		Name: ptr("test-instance"),
 	}, mockHTTPResponse(200), nil
 }
 
 func (m *mockNvidiaCarbideClient) DeleteInstance(
-	ctx context.Context, org string, instanceId string, deleteReq *bmm.InstanceDeleteRequest,
+	ctx context.Context, org string, instanceId string, deleteReq *nico.InstanceDeleteRequest,
 ) (*http.Response, error) {
 	if m.deleteInstanceFunc != nil {
 		return m.deleteInstanceFunc(ctx, org, instanceId, deleteReq)
@@ -161,14 +161,14 @@ func (m *mockNvidiaCarbideClient) DeleteInstance(
 }
 
 func (m *mockNvidiaCarbideClient) UpdateInstance(
-	ctx context.Context, org string, instanceId string, req bmm.InstanceUpdateRequest,
-) (*bmm.Instance, *http.Response, error) {
+	ctx context.Context, org string, instanceId string, req nico.InstanceUpdateRequest,
+) (*nico.Instance, *http.Response, error) {
 	return nil, mockHTTPResponse(200), nil
 }
 
 func (m *mockNvidiaCarbideClient) GetMachine(
 	ctx context.Context, org string, machineId string,
-) (*bmm.Machine, *http.Response, error) {
+) (*nico.Machine, *http.Response, error) {
 	if m.getMachineFunc != nil {
 		return m.getMachineFunc(ctx, org, machineId)
 	}
@@ -177,13 +177,13 @@ func (m *mockNvidiaCarbideClient) GetMachine(
 
 func (m *mockNvidiaCarbideClient) GetCurrentTenant(
 	ctx context.Context, org string,
-) (*bmm.Tenant, *http.Response, error) {
+) (*nico.Tenant, *http.Response, error) {
 	return nil, mockHTTPResponse(200), nil
 }
 
 func (m *mockNvidiaCarbideClient) GetInstanceStatusHistory(
 	ctx context.Context, org string, instanceId string,
-) ([]bmm.StatusDetail, *http.Response, error) {
+) ([]nico.StatusDetail, *http.Response, error) {
 	return nil, mockHTTPResponse(200), nil
 }
 
