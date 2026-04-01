@@ -59,6 +59,6 @@ jobs:
             go test ./... -coverprofile=cover.out
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: cover.out
