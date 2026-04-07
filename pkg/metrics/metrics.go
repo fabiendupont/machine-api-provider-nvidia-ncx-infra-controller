@@ -24,7 +24,7 @@ import (
 var (
 	InstanceProvisionDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "mapi_nvidia_carbide_instance_provision_seconds",
+			Name:    "nico_mapi_instance_provision_seconds",
 			Help:    "Time from Create call to instance Ready state",
 			Buckets: []float64{30, 60, 120, 300, 600},
 		},
@@ -32,16 +32,24 @@ var (
 	)
 	APICallErrors = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "mapi_nvidia_carbide_api_errors_total",
-			Help: "Carbide API errors by method and status code",
+			Name: "nico_mapi_api_errors_total",
+			Help: "NICo API errors by method and status code",
 		},
 		[]string{"method", "status_code"},
 	)
 	MachinesManaged = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Name: "mapi_nvidia_carbide_machines_managed",
+			Name: "nico_mapi_machines_managed",
 			Help: "Number of machines currently managed by this provider",
 		},
+	)
+	APILatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "nico_mapi_api_latency_seconds",
+			Help:    "NICo API call latency by method",
+			Buckets: []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+		},
+		[]string{"method"},
 	)
 )
 
@@ -50,5 +58,6 @@ func init() {
 		InstanceProvisionDuration,
 		APICallErrors,
 		MachinesManaged,
+		APILatency,
 	)
 }

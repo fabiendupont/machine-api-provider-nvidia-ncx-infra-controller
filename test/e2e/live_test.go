@@ -36,7 +36,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
+	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/apis/nicoprovider/v1beta1"
 )
 
 const (
@@ -49,7 +49,7 @@ const (
 
 func TestE2ELive(t *testing.T) {
 	RegisterFailHandler(Fail)
-	_, _ = fmt.Fprintf(GinkgoWriter, "Starting machine-api-provider-nvidia-carbide live e2e test suite\n")
+	_, _ = fmt.Fprintf(GinkgoWriter, "Starting machine-api-provider-nvidia-ncx-infra-controller live e2e test suite\n")
 	RunSpecs(t, "Live E2E Suite")
 }
 
@@ -88,18 +88,18 @@ var _ = Describe("Live Machine API Provider E2E", Label("live"), func() {
 		token = getKeycloakToken()
 	})
 
-	Context("Machine lifecycle against live Carbide API", func() {
+	Context("Machine lifecycle against live NICo API", func() {
 		It("should create a Machine, verify provisioning, and delete it", func() {
 			machineName := fmt.Sprintf("e2e-live-machine-%d", time.Now().Unix())
 
-			By("Setting up infrastructure via Carbide API")
+			By("Setting up infrastructure via NICo API")
 			siteID, tenantID, vpcID, subnetID, machineID := setupInfrastructureViaAPI(token, testOrgName, machineName)
 
 			By("Creating credentials secret")
 			secret := createCredentialsSecret(ctx, k8sClient, fmt.Sprintf("%s-creds", machineName), testNamespace, token)
 
 			By("Building provider spec")
-			providerSpec := &v1beta1.NvidiaCarbideMachineProviderSpec{
+			providerSpec := &v1beta1.NicoMachineProviderSpec{
 				SiteID:    siteID,
 				TenantID:  tenantID,
 				VpcID:     vpcID,
@@ -170,7 +170,7 @@ var _ = Describe("Live Machine API Provider E2E", Label("live"), func() {
 
 			By("Verifying provider ID is set")
 			providerID, _, _ := unstructured.NestedString(result.Object, "spec", "providerID")
-			Expect(providerID).To(HavePrefix("nvidia-carbide://"))
+			Expect(providerID).To(HavePrefix("nico://"))
 
 			By("Deleting the machine")
 			err = dynamicClient.Resource(machineGVR).Namespace(testNamespace).Delete(ctx, machineName, metav1.DeleteOptions{})
@@ -185,7 +185,7 @@ var _ = Describe("Live Machine API Provider E2E", Label("live"), func() {
 			By("Cleaning up credentials secret")
 			Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
 
-			By("Cleaning up infrastructure via Carbide API")
+			By("Cleaning up infrastructure via NICo API")
 			cleanupInfrastructureViaAPI(token, testOrgName, subnetID, vpcID, siteID)
 		})
 	})

@@ -19,8 +19,11 @@ package machine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,15 +37,15 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
-	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/providerid"
+	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/apis/nicoprovider/v1beta1"
+	"github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/providerid"
 	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
 )
 
 const testInstanceID = "test-instance-id"
 
-// mockCarbideClient implements NvidiaCarbideClientInterface for testing
-type mockCarbideClient struct {
+// mockNicoClient implements NicoClientInterface for testing
+type mockNicoClient struct {
 	createInstance func(
 		ctx context.Context, org string, req nico.InstanceCreateRequest,
 	) (*nico.Instance, *http.Response, error)
@@ -65,26 +68,26 @@ type mockCarbideClient struct {
 	) ([]nico.StatusDetail, *http.Response, error)
 }
 
-func (m *mockCarbideClient) CreateInstance(
+func (m *mockNicoClient) CreateInstance(
 	ctx context.Context, org string, req nico.InstanceCreateRequest,
 ) (*nico.Instance, *http.Response, error) {
 	return m.createInstance(ctx, org, req)
 }
 
-func (m *mockCarbideClient) GetInstance(
+func (m *mockNicoClient) GetInstance(
 	ctx context.Context, org string, instanceId string,
 ) (*nico.Instance, *http.Response, error) {
 	return m.getInstance(ctx, org, instanceId)
 }
 
-func (m *mockCarbideClient) DeleteInstance(
+func (m *mockNicoClient) DeleteInstance(
 	ctx context.Context, org string, instanceId string,
 	deleteReq *nico.InstanceDeleteRequest,
 ) (*http.Response, error) {
 	return m.deleteInstance(ctx, org, instanceId, deleteReq)
 }
 
-func (m *mockCarbideClient) GetMachine(
+func (m *mockNicoClient) GetMachine(
 	ctx context.Context, org string, machineId string,
 ) (*nico.Machine, *http.Response, error) {
 	if m.getMachine != nil {
@@ -93,13 +96,13 @@ func (m *mockCarbideClient) GetMachine(
 	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
 
-func (m *mockCarbideClient) GetCurrentTenant(
+func (m *mockNicoClient) GetCurrentTenant(
 	ctx context.Context, org string,
 ) (*nico.Tenant, *http.Response, error) {
 	return nil, &http.Response{StatusCode: 200}, nil
 }
 
-func (m *mockCarbideClient) GetInstanceStatusHistory(
+func (m *mockNicoClient) GetInstanceStatusHistory(
 	ctx context.Context, org string, instanceId string,
 ) ([]nico.StatusDetail, *http.Response, error) {
 	if m.getInstanceStatusHistory != nil {
@@ -108,7 +111,7 @@ func (m *mockCarbideClient) GetInstanceStatusHistory(
 	return nil, &http.Response{StatusCode: 200}, nil
 }
 
-func (m *mockCarbideClient) UpdateInstance(
+func (m *mockNicoClient) UpdateInstance(
 	ctx context.Context, org string, instanceId string,
 	req nico.InstanceUpdateRequest,
 ) (*nico.Instance, *http.Response, error) {
@@ -118,7 +121,7 @@ func (m *mockCarbideClient) UpdateInstance(
 	return nil, &http.Response{StatusCode: 200}, nil
 }
 
-func newTestActuator(mock *mockCarbideClient) *Actuator {
+func newTestActuator(mock *mockNicoClient) *Actuator {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = machinev1beta1.AddToScheme(scheme)
@@ -132,7 +135,7 @@ func newTestActuator(mock *mockCarbideClient) *Actuator {
 }
 
 func newTestActuatorWithMachine(
-	mock *mockCarbideClient, machine *machinev1beta1.Machine,
+	mock *mockNicoClient, machine *machinev1beta1.Machine,
 ) (*Actuator, *record.FakeRecorder) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -164,21 +167,21 @@ func testInstance(id string) *nico.Instance {
 	}
 }
 
-func validProviderSpec() v1beta1.NvidiaCarbideMachineProviderSpec {
-	return v1beta1.NvidiaCarbideMachineProviderSpec{
+func validProviderSpec() v1beta1.NicoMachineProviderSpec {
+	return v1beta1.NicoMachineProviderSpec{
 		SiteID:         "550e8400-e29b-41d4-a716-446655440000",
 		TenantID:       "660e8400-e29b-41d4-a716-446655440001",
 		InstanceTypeID: "990e8400-e29b-41d4-a716-446655440004",
 		VpcID:          "770e8400-e29b-41d4-a716-446655440002",
 		SubnetID:       "880e8400-e29b-41d4-a716-446655440003",
 		CredentialsSecret: v1beta1.CredentialsSecretReference{
-			Name:      "nvidia-carbide-creds",
+			Name:      "nico-creds",
 			Namespace: "default",
 		},
 	}
 }
 
-func createTypedTestMachine(providerSpec v1beta1.NvidiaCarbideMachineProviderSpec) *machinev1beta1.Machine {
+func createTypedTestMachine(providerSpec v1beta1.NicoMachineProviderSpec) *machinev1beta1.Machine {
 	specBytes, _ := json.Marshal(providerSpec)
 	return &machinev1beta1.Machine{
 		ObjectMeta: metav1.ObjectMeta{
@@ -193,7 +196,7 @@ func createTypedTestMachine(providerSpec v1beta1.NvidiaCarbideMachineProviderSpe
 	}
 }
 
-func createTestMachine(providerSpec v1beta1.NvidiaCarbideMachineProviderSpec) *unstructured.Unstructured {
+func createTestMachine(providerSpec v1beta1.NicoMachineProviderSpec) *unstructured.Unstructured {
 	machine := &unstructured.Unstructured{}
 	machine.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "machine.openshift.io",
@@ -210,8 +213,8 @@ func createTestMachine(providerSpec v1beta1.NvidiaCarbideMachineProviderSpec) *u
 }
 
 func createTestMachineWithStatus(
-	providerSpec v1beta1.NvidiaCarbideMachineProviderSpec,
-	providerStatus v1beta1.NvidiaCarbideMachineProviderStatus,
+	providerSpec v1beta1.NicoMachineProviderSpec,
+	providerStatus v1beta1.NicoMachineProviderStatus,
 ) *unstructured.Unstructured {
 	machine := createTestMachine(providerSpec)
 
@@ -223,7 +226,7 @@ func createTestMachineWithStatus(
 
 func TestCreate_Success(t *testing.T) {
 	instanceID := uuid.New().String()
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,
 		) (*nico.Instance, *http.Response, error) {
@@ -241,7 +244,7 @@ func TestCreate_Success(t *testing.T) {
 }
 
 func TestCreate_APIError(t *testing.T) {
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,
 		) (*nico.Instance, *http.Response, error) {
@@ -260,7 +263,7 @@ func TestCreate_APIError(t *testing.T) {
 
 func TestCreate_InvalidSpec(t *testing.T) {
 	createCalled := false
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,
 		) (*nico.Instance, *http.Response, error) {
@@ -286,7 +289,7 @@ func TestCreate_InvalidSpec(t *testing.T) {
 }
 
 func TestCreate_MissingRequiredFields(t *testing.T) {
-	mock := &mockCarbideClient{}
+	mock := &mockNicoClient{}
 	actuator := newTestActuator(mock)
 
 	// Neither instanceTypeId nor machineId
@@ -301,7 +304,7 @@ func TestCreate_MissingRequiredFields(t *testing.T) {
 }
 
 func TestExists_TransientError(t *testing.T) {
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		getInstance: func(ctx context.Context, org string, instanceId string) (*nico.Instance, *http.Response, error) {
 			return nil, nil, fmt.Errorf("connection timeout")
 		},
@@ -309,7 +312,7 @@ func TestExists_TransientError(t *testing.T) {
 
 	actuator := newTestActuator(mock)
 	instanceID := testInstanceID
-	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
 
@@ -323,7 +326,7 @@ func TestExists_TransientError(t *testing.T) {
 }
 
 func TestExists_NotFound(t *testing.T) {
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		getInstance: func(ctx context.Context, org string, instanceId string) (*nico.Instance, *http.Response, error) {
 			return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 		},
@@ -331,7 +334,7 @@ func TestExists_NotFound(t *testing.T) {
 
 	actuator := newTestActuator(mock)
 	instanceID := testInstanceID
-	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
 
@@ -345,7 +348,7 @@ func TestExists_NotFound(t *testing.T) {
 }
 
 func TestExists_InstanceExists(t *testing.T) {
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		getInstance: func(ctx context.Context, org string, instanceId string) (*nico.Instance, *http.Response, error) {
 			return testInstance(instanceId), &http.Response{StatusCode: 200}, nil
 		},
@@ -353,7 +356,7 @@ func TestExists_InstanceExists(t *testing.T) {
 
 	actuator := newTestActuator(mock)
 	instanceID := testInstanceID
-	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
 
@@ -367,7 +370,7 @@ func TestExists_InstanceExists(t *testing.T) {
 }
 
 func TestExists_NoInstanceID(t *testing.T) {
-	mock := &mockCarbideClient{}
+	mock := &mockNicoClient{}
 	actuator := newTestActuator(mock)
 	machine := createTestMachine(validProviderSpec())
 
@@ -381,7 +384,7 @@ func TestExists_NoInstanceID(t *testing.T) {
 }
 
 func TestDelete_AlreadyDeleted(t *testing.T) {
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
 			deleteReq *nico.InstanceDeleteRequest,
@@ -392,7 +395,7 @@ func TestDelete_AlreadyDeleted(t *testing.T) {
 
 	actuator := newTestActuator(mock)
 	instanceID := testInstanceID
-	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
 
@@ -403,7 +406,7 @@ func TestDelete_AlreadyDeleted(t *testing.T) {
 }
 
 func TestDelete_Success(t *testing.T) {
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
 			deleteReq *nico.InstanceDeleteRequest,
@@ -414,7 +417,7 @@ func TestDelete_Success(t *testing.T) {
 
 	actuator := newTestActuator(mock)
 	instanceID := testInstanceID
-	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
 
@@ -425,7 +428,7 @@ func TestDelete_Success(t *testing.T) {
 }
 
 func TestDelete_NoInstanceID(t *testing.T) {
-	mock := &mockCarbideClient{}
+	mock := &mockNicoClient{}
 	actuator := newTestActuator(mock)
 	machine := createTestMachine(validProviderSpec())
 
@@ -438,7 +441,7 @@ func TestDelete_NoInstanceID(t *testing.T) {
 func TestValidateProviderSpec(t *testing.T) {
 	tests := []struct {
 		name    string
-		spec    v1beta1.NvidiaCarbideMachineProviderSpec
+		spec    v1beta1.NicoMachineProviderSpec
 		wantErr bool
 	}{
 		{
@@ -448,7 +451,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "valid with machineId",
-			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+			spec: func() v1beta1.NicoMachineProviderSpec {
 				s := validProviderSpec()
 				s.InstanceTypeID = ""
 				s.MachineID = "machine-id"
@@ -458,7 +461,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "both instanceTypeId and machineId",
-			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+			spec: func() v1beta1.NicoMachineProviderSpec {
 				s := validProviderSpec()
 				s.MachineID = "machine-id"
 				return s
@@ -467,7 +470,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "neither instanceTypeId nor machineId",
-			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+			spec: func() v1beta1.NicoMachineProviderSpec {
 				s := validProviderSpec()
 				s.InstanceTypeID = ""
 				return s
@@ -476,7 +479,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "missing siteId",
-			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+			spec: func() v1beta1.NicoMachineProviderSpec {
 				s := validProviderSpec()
 				s.SiteID = ""
 				return s
@@ -485,7 +488,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "missing tenantId",
-			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+			spec: func() v1beta1.NicoMachineProviderSpec {
 				s := validProviderSpec()
 				s.TenantID = ""
 				return s
@@ -494,7 +497,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "missing vpcId",
-			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+			spec: func() v1beta1.NicoMachineProviderSpec {
 				s := validProviderSpec()
 				s.VpcID = ""
 				return s
@@ -503,7 +506,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "missing subnetId",
-			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+			spec: func() v1beta1.NicoMachineProviderSpec {
 				s := validProviderSpec()
 				s.SubnetID = ""
 				return s
@@ -512,7 +515,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "too many additional subnets",
-			spec: func() v1beta1.NvidiaCarbideMachineProviderSpec {
+			spec: func() v1beta1.NicoMachineProviderSpec {
 				s := validProviderSpec()
 				s.AdditionalSubnetIDs = make([]v1beta1.AdditionalSubnet, 11)
 				return s
@@ -550,7 +553,7 @@ func TestUpdate_StateTracking(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &mockCarbideClient{
+			mock := &mockNicoClient{
 				getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 					inst := testInstance(instanceID)
 					inst.Status = tt.status.Ptr()
@@ -558,7 +561,7 @@ func TestUpdate_StateTracking(t *testing.T) {
 				},
 			}
 
-			providerStatus := v1beta1.NvidiaCarbideMachineProviderStatus{
+			providerStatus := v1beta1.NicoMachineProviderStatus{
 				InstanceID: &instanceID,
 			}
 			machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
@@ -576,7 +579,7 @@ func TestUpdate_HealthIntegration(t *testing.T) {
 	instanceID := uuid.New().String()
 	machineID := "machine-123"
 
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			return inst, &http.Response{StatusCode: 200}, nil
@@ -593,7 +596,7 @@ func TestUpdate_HealthIntegration(t *testing.T) {
 		},
 	}
 
-	providerStatus := v1beta1.NvidiaCarbideMachineProviderStatus{
+	providerStatus := v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	}
 	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
@@ -609,7 +612,7 @@ func TestUpdate_HealthyMachine(t *testing.T) {
 	instanceID := uuid.New().String()
 	machineID := "machine-123"
 
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			return inst, &http.Response{StatusCode: 200}, nil
@@ -624,7 +627,7 @@ func TestUpdate_HealthyMachine(t *testing.T) {
 		},
 	}
 
-	providerStatus := v1beta1.NvidiaCarbideMachineProviderStatus{
+	providerStatus := v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	}
 	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
@@ -637,8 +640,8 @@ func TestUpdate_HealthyMachine(t *testing.T) {
 }
 
 func createTypedTestMachineWithStatus(
-	providerSpec v1beta1.NvidiaCarbideMachineProviderSpec,
-	providerStatus v1beta1.NvidiaCarbideMachineProviderStatus,
+	providerSpec v1beta1.NicoMachineProviderSpec,
+	providerStatus v1beta1.NicoMachineProviderStatus,
 ) *machinev1beta1.Machine {
 	specBytes, _ := json.Marshal(providerSpec)
 	statusBytes, _ := json.Marshal(providerStatus)
@@ -660,7 +663,7 @@ func createTypedTestMachineWithStatus(
 
 func TestDelete_MHCRemediation(t *testing.T) {
 	var capturedDeleteReq *nico.InstanceDeleteRequest
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
 			deleteReq *nico.InstanceDeleteRequest,
@@ -672,7 +675,7 @@ func TestDelete_MHCRemediation(t *testing.T) {
 
 	actuator := newTestActuator(mock)
 	instanceID := testInstanceID
-	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
 	// Set the MHC remediation annotation
@@ -697,7 +700,7 @@ func TestDelete_MHCRemediation(t *testing.T) {
 
 func TestDelete_NoMHCRemediation(t *testing.T) {
 	var capturedDeleteReq *nico.InstanceDeleteRequest
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
 			deleteReq *nico.InstanceDeleteRequest,
@@ -709,7 +712,7 @@ func TestDelete_NoMHCRemediation(t *testing.T) {
 
 	actuator := newTestActuator(mock)
 	instanceID := testInstanceID
-	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NvidiaCarbideMachineProviderStatus{
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	})
 
@@ -726,7 +729,7 @@ func TestUpdate_StatusHistoryOnError(t *testing.T) {
 	instanceID := uuid.New().String()
 	errorStatus := nico.INSTANCESTATUS_ERROR
 
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			inst.Status = &errorStatus
@@ -746,7 +749,7 @@ func TestUpdate_StatusHistoryOnError(t *testing.T) {
 		},
 	}
 
-	providerStatus := v1beta1.NvidiaCarbideMachineProviderStatus{
+	providerStatus := v1beta1.NicoMachineProviderStatus{
 		InstanceID: &instanceID,
 	}
 	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
@@ -771,7 +774,7 @@ func TestUpdate_StatusHistoryOnError(t *testing.T) {
 func TestCreate_WithDpuExtensionServices(t *testing.T) {
 	instanceID := uuid.New().String()
 	updateCalled := false
-	mock := &mockCarbideClient{
+	mock := &mockNicoClient{
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,
 		) (*nico.Instance, *http.Response, error) {
@@ -821,5 +824,167 @@ func TestProviderIDParsing(t *testing.T) {
 	}
 	if parsed.SiteName != "test-site" {
 		t.Errorf("Expected siteName=test-site, got %s", parsed.SiteName)
+	}
+}
+
+func TestCreate_HTTPStatusErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		wantKind   APIErrorKind
+	}{
+		{"400 terminal", 400, ErrorTerminal},
+		{"429 transient", 429, ErrorTransient},
+		{"500 transient", 500, ErrorTransient},
+		{"503 transient", 503, ErrorTransient},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockNicoClient{
+				createInstance: func(
+					ctx context.Context, org string, req nico.InstanceCreateRequest,
+				) (*nico.Instance, *http.Response, error) {
+					return nil, &http.Response{
+						StatusCode: tt.statusCode,
+						Body:       io.NopCloser(strings.NewReader(`{"message":"test error"}`)),
+					}, fmt.Errorf("API error %d", tt.statusCode)
+				},
+			}
+
+			machine := createTypedTestMachine(validProviderSpec())
+			actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+			err := actuator.Create(context.Background(), machine)
+			if err == nil {
+				t.Fatal("Create() expected error, got nil")
+			}
+
+			var classified *ClassifiedError
+			if !errors.As(err, &classified) {
+				t.Fatalf("expected ClassifiedError, got %T: %v", err, err)
+			}
+			if classified.Kind != tt.wantKind {
+				t.Errorf("error kind = %d, want %d", classified.Kind, tt.wantKind)
+			}
+		})
+	}
+}
+
+func TestDelete_APIError500(t *testing.T) {
+	mock := &mockNicoClient{
+		deleteInstance: func(
+			ctx context.Context, org string, instanceId string,
+			deleteReq *nico.InstanceDeleteRequest,
+		) (*http.Response, error) {
+			return &http.Response{StatusCode: 500}, fmt.Errorf("internal server error")
+		},
+	}
+
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+
+	err := actuator.Delete(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Delete() expected error for 500, got nil")
+	}
+}
+
+func TestDelete_HTTP202Accepted(t *testing.T) {
+	mock := &mockNicoClient{
+		deleteInstance: func(
+			ctx context.Context, org string, instanceId string,
+			deleteReq *nico.InstanceDeleteRequest,
+		) (*http.Response, error) {
+			return &http.Response{StatusCode: 202}, nil
+		},
+	}
+
+	actuator := newTestActuator(mock)
+	instanceID := testInstanceID
+	machine := createTestMachineWithStatus(validProviderSpec(), v1beta1.NicoMachineProviderStatus{
+		InstanceID: &instanceID,
+	})
+
+	err := actuator.Delete(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Delete() unexpected error for 202: %v", err)
+	}
+}
+
+func TestCreate_NilInstance(t *testing.T) {
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return nil, &http.Response{StatusCode: 201}, nil
+		},
+	}
+
+	machine := createTypedTestMachine(validProviderSpec())
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Create() expected error for nil instance, got nil")
+	}
+}
+
+func TestUpdate_ProvisioningTimeout(t *testing.T) {
+	// Temporarily reduce timeout for testing
+	origTimeout := ProvisioningTimeout
+	ProvisioningTimeout = 1 * time.Millisecond
+	defer func() { ProvisioningTimeout = origTimeout }()
+
+	instanceID := uuid.New().String()
+	mock := &mockNicoClient{
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
+			inst := testInstance(instanceID)
+			status := nico.INSTANCESTATUS_PROVISIONING
+			inst.Status = &status
+			return inst, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	// Set InstanceProvisioned condition with a timestamp in the past
+	pastTime := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	providerStatus := v1beta1.NicoMachineProviderStatus{
+		InstanceID: &instanceID,
+		Conditions: []metav1.Condition{
+			{
+				Type:               "InstanceProvisioned",
+				Status:             metav1.ConditionTrue,
+				Reason:             "InstanceCreated",
+				Message:            "Instance created",
+				LastTransitionTime: pastTime,
+			},
+		},
+	}
+	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+	actuator, recorder := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+
+	// Check for ProvisioningTimeout event
+	close(recorder.Events)
+	foundTimeout := false
+	for event := range recorder.Events {
+		if strings.Contains(event, "ProvisioningTimeout") {
+			foundTimeout = true
+		}
+	}
+	if !foundTimeout {
+		t.Error("Expected ProvisioningTimeout event")
+	}
+
+	// Verify ErrorReason is set on the Machine
+	if machine.Status.ErrorReason == nil {
+		t.Error("Expected ErrorReason to be set")
 	}
 }

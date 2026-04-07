@@ -1,0 +1,23 @@
+---
+schema: olm.package
+name: machine-api-provider-nico
+defaultChannel: alpha
+description: >-
+  OpenShift Machine API actuator for provisioning bare-metal machines on
+  NICo platform.
+---
+schema: olm.channel
+package: machine-api-provider-nico
+name: alpha
+entries:
+  - name: machine-api-provider-nico.v0.1.0
+---
+schema: olm.bundle
+package: machine-api-provider-nico
+name: machine-api-provider-nico.v0.1.0
+image: ghcr.io/fabiendupont/machine-api-provider-nico-bundle:v0.1.0
+properties:
+  - type: olm.package
+    value:
+      packageName: machine-api-provider-nico
+      version: 0.1.0

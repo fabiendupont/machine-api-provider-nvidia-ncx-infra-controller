@@ -40,8 +40,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/actuators/machine"
-	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
+	"github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/actuators/machine"
+	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/apis/nicoprovider/v1beta1"
 	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
 )
 
@@ -88,7 +88,7 @@ var _ = BeforeSuite(func() {
 	Expect(k8sClient).NotTo(BeNil())
 
 	// Create actuator with mock client
-	mockClient := &mockNvidiaCarbideClient{}
+	mockClient := &mockNicoClient{}
 	actuator = machine.NewActuatorWithClient(k8sClient, nil, mockClient, "test-org")
 })
 
@@ -108,8 +108,8 @@ func mockHTTPResponse(statusCode int) *http.Response {
 	}
 }
 
-// mockNvidiaCarbideClient for testing
-type mockNvidiaCarbideClient struct {
+// mockNicoClient for testing
+type mockNicoClient struct {
 	createInstanceFunc func(
 		ctx context.Context, org string, req nico.InstanceCreateRequest,
 	) (*nico.Instance, *http.Response, error)
@@ -125,7 +125,7 @@ type mockNvidiaCarbideClient struct {
 	) (*nico.Machine, *http.Response, error)
 }
 
-func (m *mockNvidiaCarbideClient) CreateInstance(
+func (m *mockNicoClient) CreateInstance(
 	ctx context.Context, org string, req nico.InstanceCreateRequest,
 ) (*nico.Instance, *http.Response, error) {
 	if m.createInstanceFunc != nil {
@@ -139,7 +139,7 @@ func (m *mockNvidiaCarbideClient) CreateInstance(
 	}, mockHTTPResponse(201), nil
 }
 
-func (m *mockNvidiaCarbideClient) GetInstance(
+func (m *mockNicoClient) GetInstance(
 	ctx context.Context, org string, instanceId string,
 ) (*nico.Instance, *http.Response, error) {
 	if m.getInstanceFunc != nil {
@@ -151,7 +151,7 @@ func (m *mockNvidiaCarbideClient) GetInstance(
 	}, mockHTTPResponse(200), nil
 }
 
-func (m *mockNvidiaCarbideClient) DeleteInstance(
+func (m *mockNicoClient) DeleteInstance(
 	ctx context.Context, org string, instanceId string, deleteReq *nico.InstanceDeleteRequest,
 ) (*http.Response, error) {
 	if m.deleteInstanceFunc != nil {
@@ -160,13 +160,13 @@ func (m *mockNvidiaCarbideClient) DeleteInstance(
 	return mockHTTPResponse(204), nil
 }
 
-func (m *mockNvidiaCarbideClient) UpdateInstance(
+func (m *mockNicoClient) UpdateInstance(
 	ctx context.Context, org string, instanceId string, req nico.InstanceUpdateRequest,
 ) (*nico.Instance, *http.Response, error) {
 	return nil, mockHTTPResponse(200), nil
 }
 
-func (m *mockNvidiaCarbideClient) GetMachine(
+func (m *mockNicoClient) GetMachine(
 	ctx context.Context, org string, machineId string,
 ) (*nico.Machine, *http.Response, error) {
 	if m.getMachineFunc != nil {
@@ -175,13 +175,13 @@ func (m *mockNvidiaCarbideClient) GetMachine(
 	return nil, mockHTTPResponse(404), nil
 }
 
-func (m *mockNvidiaCarbideClient) GetCurrentTenant(
+func (m *mockNicoClient) GetCurrentTenant(
 	ctx context.Context, org string,
 ) (*nico.Tenant, *http.Response, error) {
 	return nil, mockHTTPResponse(200), nil
 }
 
-func (m *mockNvidiaCarbideClient) GetInstanceStatusHistory(
+func (m *mockNicoClient) GetInstanceStatusHistory(
 	ctx context.Context, org string, instanceId string,
 ) ([]nico.StatusDetail, *http.Response, error) {
 	return nil, mockHTTPResponse(200), nil
@@ -206,19 +206,19 @@ var _ = Describe("Machine Actuator Integration", func() {
 		// Create credentials secret
 		secret = &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "nvidia-carbide-creds",
+				Name:      "nico-creds",
 				Namespace: namespace.Name,
 			},
 			Data: map[string][]byte{
-				"endpoint": []byte("https://api.nvidia-carbide.test"),
+				"endpoint": []byte("https://api.nico.test"),
 				"orgName":  []byte("test-org"),
 				"token":    []byte("test-token"),
 			},
 		}
 		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 
-		// Create Machine with NvidiaCarbideMachineProviderSpec
-		providerSpec := v1beta1.NvidiaCarbideMachineProviderSpec{
+		// Create Machine with NicoMachineProviderSpec
+		providerSpec := v1beta1.NicoMachineProviderSpec{
 			SiteID:         "8a880c71-fe4b-4e43-9e24-ebfcb8a84c5f",
 			TenantID:       "b013708a-99f0-47b2-a630-cabb4ae1d3df",
 			InstanceTypeID: "d4e5f6a7-b8c9-4d0e-a1f2-346789abcdef",
@@ -295,7 +295,7 @@ var _ = Describe("Machine Actuator Integration", func() {
 
 func createTestMachine(
 	name, namespace string,
-	providerSpec v1beta1.NvidiaCarbideMachineProviderSpec,
+	providerSpec v1beta1.NicoMachineProviderSpec,
 ) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(machinev1.GroupVersion.WithKind("Machine"))

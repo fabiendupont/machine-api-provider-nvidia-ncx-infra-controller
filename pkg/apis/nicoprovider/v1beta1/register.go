@@ -24,7 +24,7 @@ import (
 var (
 	// SchemeGroupVersion is group version used to register these objects
 	SchemeGroupVersion = schema.GroupVersion{
-		Group:   "nvidiacarbideprovider.infrastructure.cluster.x-k8s.io",
+		Group:   "nicoprovider.infrastructure.cluster.x-k8s.io",
 		Version: "v1beta1",
 	}
 
@@ -36,7 +36,7 @@ var (
 )
 
 func addKnownTypes(scheme *runtime.Scheme) error {
-	// Note: NvidiaCarbideMachineProviderSpec and NvidiaCarbideMachineProviderStatus are embedded
+	// Note: NicoMachineProviderSpec and NicoMachineProviderStatus are embedded
 	// in OpenShift Machine objects via providerSpec.value and providerStatus.
 	// They are not standalone CRDs, so we don't register them as such.
 	return nil

@@ -23,10 +23,13 @@ import (
 	"github.com/google/uuid"
 )
 
-const ProviderPrefix = "nvidia-carbide://"
+const (
+	ProviderPrefix       = "nico://"
+	LegacyProviderPrefix = "nvidia-carbide://"
+)
 
-// ProviderID represents a parsed NVIDIA Carbide provider ID.
-// Format: nvidia-carbide://org/tenant/site/instance-id
+// ProviderID represents a parsed NICo provider ID.
+// Format: nico://org/tenant/site/instance-id
 type ProviderID struct {
 	OrgName    string
 	TenantName string
@@ -50,19 +53,25 @@ func (p *ProviderID) String() string {
 }
 
 // ParseProviderID parses a provider ID string.
-// Supports both legacy 3-segment format (nvidia-carbide://org/site/id) and
-// new 4-segment format (nvidia-carbide://org/tenant/site/id).
+// Accepts both the current nico:// prefix and the legacy nvidia-carbide:// prefix.
+// Supports both legacy 3-segment format (scheme://org/site/id) and
+// new 4-segment format (scheme://org/tenant/site/id).
 func ParseProviderID(providerIDStr string) (*ProviderID, error) {
-	if !strings.HasPrefix(providerIDStr, ProviderPrefix) {
-		return nil, fmt.Errorf("invalid provider ID prefix, expected %q: %s", ProviderPrefix, providerIDStr)
+	var trimmed string
+	switch {
+	case strings.HasPrefix(providerIDStr, ProviderPrefix):
+		trimmed = strings.TrimPrefix(providerIDStr, ProviderPrefix)
+	case strings.HasPrefix(providerIDStr, LegacyProviderPrefix):
+		trimmed = strings.TrimPrefix(providerIDStr, LegacyProviderPrefix)
+	default:
+		return nil, fmt.Errorf("invalid provider ID prefix, expected %q or %q: %s", ProviderPrefix, LegacyProviderPrefix, providerIDStr)
 	}
 
-	trimmed := strings.TrimPrefix(providerIDStr, ProviderPrefix)
 	parts := strings.Split(trimmed, "/")
 
 	switch len(parts) {
 	case 3:
-		// Legacy format: nvidia-carbide://org/site/instance-id
+		// Legacy format: scheme://org/site/instance-id
 		instanceID, err := uuid.Parse(parts[2])
 		if err != nil {
 			return nil, fmt.Errorf("invalid instance ID %q: %w", parts[2], err)
@@ -74,7 +83,7 @@ func ParseProviderID(providerIDStr string) (*ProviderID, error) {
 			InstanceID: instanceID,
 		}, nil
 	case 4:
-		// New format: nvidia-carbide://org/tenant/site/instance-id
+		// New format: scheme://org/tenant/site/instance-id
 		instanceID, err := uuid.Parse(parts[3])
 		if err != nil {
 			return nil, fmt.Errorf("invalid instance ID %q: %w", parts[3], err)

@@ -1,7 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: machine-api-provider-nvidia-carbide-manager-role
+  name: machine-api-provider-nico-manager-role
 rules:
   - apiGroups: [""]
     resources: [secrets]

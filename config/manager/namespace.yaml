@@ -3,5 +3,5 @@ kind: Namespace
 metadata:
   labels:
     control-plane: controller-manager
-    app.kubernetes.io/name: machine-api-provider-nvidia-carbide
-  name: machine-api-provider-nvidia-carbide-system
+    app.kubernetes.io/name: machine-api-provider-nico
+  name: machine-api-provider-nico-system

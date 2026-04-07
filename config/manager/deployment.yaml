@@ -2,21 +2,21 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: controller-manager
-  namespace: machine-api-provider-nvidia-carbide-system
+  namespace: machine-api-provider-nico-system
   labels:
     control-plane: controller-manager
-    app.kubernetes.io/name: machine-api-provider-nvidia-carbide
+    app.kubernetes.io/name: machine-api-provider-nico
 spec:
   selector:
     matchLabels:
       control-plane: controller-manager
-      app.kubernetes.io/name: machine-api-provider-nvidia-carbide
+      app.kubernetes.io/name: machine-api-provider-nico
   replicas: 1
   template:
     metadata:
       labels:
         control-plane: controller-manager
-        app.kubernetes.io/name: machine-api-provider-nvidia-carbide
+        app.kubernetes.io/name: machine-api-provider-nico
     spec:
       securityContext:
         runAsNonRoot: true
@@ -25,7 +25,7 @@ spec:
       containers:
         - command:
             - /manager
-          image: ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide:latest
+          image: ghcr.io/fabiendupont/machine-api-provider-nico:latest
           name: manager
           securityContext:
             readOnlyRootFilesystem: true
@@ -52,5 +52,5 @@ spec:
             requests:
               cpu: 10m
               memory: 64Mi
-      serviceAccountName: machine-api-provider-nvidia-carbide-controller-manager
+      serviceAccountName: machine-api-provider-nico-controller-manager
       terminationGracePeriodSeconds: 10

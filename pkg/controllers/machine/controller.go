@@ -18,6 +18,7 @@ package machine
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -30,12 +31,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/actuators/machine"
+	"github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/actuators/machine"
 )
 
 const (
 	// MachineFinalizer is the finalizer for OpenShift machines
-	MachineFinalizer = "machine.openshift.io/nvidia-carbide"
+	MachineFinalizer = "machine.openshift.io/nico"
+
+	// LegacyMachineFinalizer is the old finalizer name, accepted on read for upgrade path
+	LegacyMachineFinalizer = "machine.openshift.io/nvidia-carbide"
 
 	// RequeueAfterSeconds is the time to wait before requeuing
 	RequeueAfterSeconds = 30
@@ -96,8 +100,7 @@ func (r *MachineReconciler) reconcileNormal(ctx context.Context, machineObj clie
 		// Create instance
 		logger.Info("Creating instance")
 		if err := r.Actuator.Create(ctx, machineObj); err != nil {
-			logger.Error(err, "failed to create instance")
-			return ctrl.Result{RequeueAfter: RequeueAfterSeconds * time.Second}, err
+			return r.handleActuatorError(ctx, logger, machineObj, "create", err)
 		}
 		logger.Info("Successfully created instance")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -106,8 +109,7 @@ func (r *MachineReconciler) reconcileNormal(ctx context.Context, machineObj clie
 	// Update instance status
 	logger.Info("Updating instance status")
 	if err := r.Actuator.Update(ctx, machineObj); err != nil {
-		logger.Error(err, "failed to update instance")
-		return ctrl.Result{RequeueAfter: RequeueAfterSeconds * time.Second}, err
+		return r.handleActuatorError(ctx, logger, machineObj, "update", err)
 	}
 
 	logger.Info("Successfully reconciled Machine")
@@ -125,14 +127,34 @@ func (r *MachineReconciler) reconcileDelete(ctx context.Context, machineObj clie
 		return ctrl.Result{}, err
 	}
 
-	// Remove finalizer
+	// Remove finalizer (both current and legacy)
 	controllerutil.RemoveFinalizer(machineObj, MachineFinalizer)
+	controllerutil.RemoveFinalizer(machineObj, LegacyMachineFinalizer)
 	if err := r.Update(ctx, machineObj); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
 	}
 
 	logger.Info("Successfully deleted Machine")
 	return ctrl.Result{}, nil
+}
+
+// handleActuatorError inspects the error returned by actuator methods.
+// Terminal errors (e.g. HTTP 400) are not retried. Transient errors
+// are requeued after RequeueAfterSeconds.
+func (r *MachineReconciler) handleActuatorError(
+	ctx context.Context,
+	logger interface{ Error(error, string, ...interface{}) },
+	machineObj client.Object,
+	operation string,
+	err error,
+) (ctrl.Result, error) {
+	var classified *machine.ClassifiedError
+	if stderrors.As(err, &classified) && classified.Kind == machine.ErrorTerminal {
+		logger.Error(err, "terminal error, will not retry", "operation", operation)
+		return ctrl.Result{}, nil
+	}
+	logger.Error(err, "failed to "+operation+" instance")
+	return ctrl.Result{RequeueAfter: RequeueAfterSeconds * time.Second}, err
 }
 
 // SetupWithManager sets up the controller with the Manager
@@ -148,7 +170,7 @@ func SetupMachineController(mgr ctrl.Manager, actuator *machine.Actuator) error 
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Actuator:      actuator,
-		EventRecorder: mgr.GetEventRecorderFor("nvidia-carbide-machine-controller"),
+		EventRecorder: mgr.GetEventRecorderFor("nico-machine-controller"),
 	}
 
 	return reconciler.SetupWithManager(mgr)

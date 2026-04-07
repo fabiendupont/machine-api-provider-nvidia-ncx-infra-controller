@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
-// MachineValidator validates Machine objects with NvidiaCarbideMachineProviderSpec
+// MachineValidator validates Machine objects with NicoMachineProviderSpec.
 type MachineValidator struct {
 	Decoder admission.Decoder
 }
@@ -44,15 +44,15 @@ func (v *MachineValidator) Handle(ctx context.Context, req admission.Request) ad
 		return admission.Allowed("no providerSpec to validate")
 	}
 
-	providerSpec := &NvidiaCarbideMachineProviderSpec{}
+	providerSpec := &NicoMachineProviderSpec{}
 	if err := json.Unmarshal(machine.Spec.ProviderSpec.Value.Raw, providerSpec); err != nil {
 		return admission.Denied(fmt.Sprintf("failed to unmarshal providerSpec: %v", err))
 	}
 
-	// Skip validation if this is not a Carbide provider spec (no required fields set)
+	// Skip validation if this is not a NICo provider spec (no required fields set)
 	if providerSpec.SiteID == "" && providerSpec.TenantID == "" && providerSpec.VpcID == "" &&
 		providerSpec.SubnetID == "" && providerSpec.InstanceTypeID == "" && providerSpec.MachineID == "" {
-		return admission.Allowed("not a Carbide provider spec")
+		return admission.Allowed("not a NICo provider spec")
 	}
 
 	// Validate required fields
@@ -73,7 +73,7 @@ func (v *MachineValidator) Handle(ctx context.Context, req admission.Request) ad
 		}
 
 		if oldMachine.Spec.ProviderSpec.Value != nil {
-			oldSpec := &NvidiaCarbideMachineProviderSpec{}
+			oldSpec := &NicoMachineProviderSpec{}
 			if err := json.Unmarshal(oldMachine.Spec.ProviderSpec.Value.Raw, oldSpec); err == nil {
 				if err := validateImmutableFields(oldSpec, providerSpec); err != nil {
 					return admission.Denied(err.Error())
@@ -85,7 +85,7 @@ func (v *MachineValidator) Handle(ctx context.Context, req admission.Request) ad
 	return admission.Allowed("valid provider spec")
 }
 
-func validateProviderSpec(spec *NvidiaCarbideMachineProviderSpec) error {
+func validateProviderSpec(spec *NicoMachineProviderSpec) error {
 	if spec.InstanceTypeID != "" && spec.MachineID != "" {
 		return fmt.Errorf("specify either instanceTypeId or machineId, not both")
 	}
@@ -110,7 +110,7 @@ func validateProviderSpec(spec *NvidiaCarbideMachineProviderSpec) error {
 	return nil
 }
 
-func validateUUIDs(spec *NvidiaCarbideMachineProviderSpec) error {
+func validateUUIDs(spec *NicoMachineProviderSpec) error {
 	fields := map[string]string{
 		"siteId":   spec.SiteID,
 		"tenantId": spec.TenantID,
@@ -162,7 +162,7 @@ func validateUUIDs(spec *NvidiaCarbideMachineProviderSpec) error {
 	return nil
 }
 
-func validateImmutableFields(oldSpec, newSpec *NvidiaCarbideMachineProviderSpec) error {
+func validateImmutableFields(oldSpec, newSpec *NicoMachineProviderSpec) error {
 	if oldSpec.SiteID != newSpec.SiteID {
 		return fmt.Errorf("siteId is immutable (was %q, got %q)", oldSpec.SiteID, newSpec.SiteID)
 	}

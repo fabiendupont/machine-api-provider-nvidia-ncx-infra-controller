@@ -1,16 +1,16 @@
-# Machine API Provider for NVIDIA Carbide
+# Machine API Provider for NICo
 
-OpenShift Machine API actuator for provisioning bare-metal machines on NVIDIA Carbide platform.
+OpenShift Machine API actuator for provisioning bare-metal machines on NICo (NVIDIA NCX Infrastructure Controller) platform.
 
 ## Overview
 
-This provider implements the OpenShift Machine API actuator interface for NVIDIA Carbide, enabling:
+This provider implements the OpenShift Machine API actuator interface for NICo, enabling:
 
 - **Declarative machine provisioning** via `Machine` CRDs
 - **Automated scaling** via `MachineSet` controllers
 - **Integration with OpenShift cluster lifecycle** and machine management
 
-The provider translates OpenShift Machine API requests into NVIDIA Carbide REST API calls (via the carbide-rest client library), managing the full lifecycle of bare-metal instances.
+The provider translates OpenShift Machine API requests into NICo REST API calls (via the NCX Infra Controller REST SDK), managing the full lifecycle of bare-metal instances.
 
 ## Architecture
 
@@ -25,26 +25,26 @@ The provider translates OpenShift Machine API requests into NVIDIA Carbide REST 
            |                        |
            v                        v
 +-----------------------------------------------------+
-|   Machine API Provider for NVIDIA Carbide (this repo)   |
+|   Machine API Provider for NICo (this repo)         |
 |  +----------------------------------------------+   |
 |  |  Machine Reconciler                          |   |
 |  |  +----------------------------------------+  |   |
 |  |  |  Actuator                              |  |   |
 |  |  |  - Create/Update/Delete/Exists         |  |   |
-|  |  |  - NvidiaCarbideMachineProviderSpec parser |  |   |
+|  |  |  - NicoMachineProviderSpec parser      |  |   |
 |  |  +----------+-----------------------------+  |   |
 |  +-------------+--------------------------------+   |
 +----------------+------------------------------------+
                  |
                  v
 +-----------------------------------------------------+
-|         Carbide REST API Client                     |
-|         (github.com/NVIDIA/carbide-rest/client)     |
+|         NICo REST API Client                        |
+|   (github.com/NVIDIA/ncx-infra-controller-rest)    |
 +-----------------------------------------------------+
                  |
                  v
 +-----------------------------------------------------+
-|            NVIDIA Carbide Platform       |
+|            NICo Platform                            |
 |       (Bare-Metal Infrastructure Management)        |
 +-----------------------------------------------------+
 ```
@@ -77,8 +77,8 @@ branch, which must be cherry-picked into your local checkout until it is merged 
 ## Prerequisites
 
 1. OpenShift cluster (4.14+) or Kubernetes with Machine API CRDs installed
-2. NVIDIA Carbide API credentials (endpoint, orgName, token)
-3. Access to NVIDIA Carbide platform with configured Sites, VPCs, and Subnets
+2. NICo API credentials (endpoint, orgName, token)
+3. Access to NICo platform with configured Sites, VPCs, and Subnets
 
 ## Installation
 
@@ -91,22 +91,22 @@ kubectl apply -f - <<EOF
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
-  name: nvidia-carbide-catalog
+  name: nico-catalog
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide-catalog:v0.1.0
-  displayName: NVIDIA Carbide Machine API Provider
+  image: ghcr.io/fabiendupont/machine-api-provider-nico-catalog:v0.1.0
+  displayName: NICo Machine API Provider
 EOF
 ```
 
-The operator appears in OperatorHub as **Machine API Provider NVIDIA Carbide**.
+The operator appears in OperatorHub as **Machine API Provider NICo**.
 
 ### Option B: Manual (kubectl)
 
 ```bash
 # Build and push Docker image
-make docker-build docker-push IMG=your-registry/machine-api-provider-nvidia-carbide:latest
+make docker-build docker-push IMG=your-registry/machine-api-provider-nico:latest
 
 # Deploy RBAC and controller
 make deploy
@@ -115,9 +115,9 @@ make deploy
 ### Create Credentials Secret
 
 ```bash
-kubectl create secret generic nvidia-carbide-credentials \
+kubectl create secret generic nico-credentials \
   --namespace openshift-machine-api \
-  --from-literal=endpoint="https://api.carbide.nvidia.com" \
+  --from-literal=endpoint="https://api.nico.nvidia.com" \
   --from-literal=orgName="your-org-name" \
   --from-literal=token="your-api-token"
 ```
@@ -130,17 +130,17 @@ kubectl create secret generic nvidia-carbide-credentials \
 apiVersion: machine.openshift.io/v1beta1
 kind: Machine
 metadata:
-  name: worker-nvidia-carbide-1
+  name: worker-nico-1
   namespace: openshift-machine-api
   labels:
     machine.openshift.io/cluster-api-cluster: my-cluster
 spec:
   providerSpec:
     value:
-      apiVersion: nvidiacarbideprovider.infrastructure.cluster.x-k8s.io/v1beta1
-      kind: NvidiaCarbideMachineProviderSpec
+      apiVersion: nicoprovider.infrastructure.cluster.x-k8s.io/v1beta1
+      kind: NicoMachineProviderSpec
 
-      # NVIDIA Carbide Site and Tenant
+      # NICo Site and Tenant
       siteId: "550e8400-e29b-41d4-a716-446655440000"
       tenantId: "660e8400-e29b-41d4-a716-446655440001"
 
@@ -172,7 +172,7 @@ spec:
 
       # Credentials Secret
       credentialsSecret:
-        name: nvidia-carbide-credentials
+        name: nico-credentials
         namespace: openshift-machine-api
 ```
 
@@ -182,29 +182,29 @@ spec:
 apiVersion: machine.openshift.io/v1beta1
 kind: MachineSet
 metadata:
-  name: worker-nvidia-carbide-us-west
+  name: worker-nico-us-west
   namespace: openshift-machine-api
 spec:
   replicas: 3
   selector:
     matchLabels:
-      machine.openshift.io/cluster-api-machineset: worker-nvidia-carbide-us-west
+      machine.openshift.io/cluster-api-machineset: worker-nico-us-west
   template:
     metadata:
       labels:
-        machine.openshift.io/cluster-api-machineset: worker-nvidia-carbide-us-west
+        machine.openshift.io/cluster-api-machineset: worker-nico-us-west
     spec:
       providerSpec:
         value:
-          apiVersion: nvidiacarbideprovider.infrastructure.cluster.x-k8s.io/v1beta1
-          kind: NvidiaCarbideMachineProviderSpec
+          apiVersion: nicoprovider.infrastructure.cluster.x-k8s.io/v1beta1
+          kind: NicoMachineProviderSpec
           siteId: "550e8400-e29b-41d4-a716-446655440000"
           tenantId: "660e8400-e29b-41d4-a716-446655440001"
           vpcId: "770e8400-e29b-41d4-a716-446655440002"
           subnetId: "880e8400-e29b-41d4-a716-446655440003"
           instanceTypeId: "990e8400-e29b-41d4-a716-446655440004"
           credentialsSecret:
-            name: nvidia-carbide-credentials
+            name: nico-credentials
             namespace: openshift-machine-api
 ```
 
@@ -225,12 +225,12 @@ spec:
 
 ## Provider Spec Reference
 
-### NvidiaCarbideMachineProviderSpec
+### NicoMachineProviderSpec
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `siteId` | string | Yes | NVIDIA Carbide Site UUID |
-| `tenantId` | string | Yes | NVIDIA Carbide Tenant ID |
+| `siteId` | string | Yes | NICo Site UUID |
+| `tenantId` | string | Yes | NICo Tenant ID |
 | `vpcId` | string | Yes | VPC UUID for networking |
 | `subnetId` | string | Yes | Primary subnet UUID |
 | `instanceTypeId` | string | * | Instance type UUID (mutually exclusive with `machineId`) |
@@ -240,8 +240,8 @@ spec:
 | `userData` | string | No | Cloud-init user data |
 | `sshKeyGroupIds` | []string | No | SSH key group UUIDs |
 | `labels` | map[string]string | No | Labels to apply to instance |
-| `description` | string | No | Description for the NVIDIA Carbide instance |
-| `operatingSystemId` | string | No | Carbide operating system UUID to install |
+| `description` | string | No | Description for the NICo instance |
+| `operatingSystemId` | string | No | NICo operating system UUID to install |
 | `networkSecurityGroupId` | string | No | Network security group UUID to attach |
 | `alwaysBootWithCustomIpxe` | bool | No | Always run iPXE script on reboot |
 | `infiniBandInterfaces` | []InfiniBandInterfaceSpec | No | InfiniBand partition attachments |
@@ -251,16 +251,16 @@ spec:
 
 \* Must specify exactly one of `instanceTypeId` or `machineId`
 
-### NvidiaCarbideMachineProviderStatus
+### NicoMachineProviderStatus
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `instanceId` | string | NVIDIA Carbide instance UUID |
+| `instanceId` | string | NICo instance UUID |
 | `machineId` | string | Physical machine ID |
 | `instanceState` | string | Instance lifecycle state (Pending, Provisioning, Configuring, Ready, etc.) |
 | `addresses` | []MachineAddress | IP addresses assigned to the machine |
 | `conditions` | []Condition | Instance lifecycle conditions (InstanceReady, MachineHealthy, etc.) |
-| `healthLabels` | map[string]string | Health labels matching the CCM (nvidia-carbide.io/healthy) |
+| `healthLabels` | map[string]string | Health labels matching the CCM (nico.io/healthy) |
 
 ## Development
 
@@ -286,10 +286,10 @@ make catalog-build catalog-push
 ### Project Structure
 
 ```
-machine-api-provider-nvidia-carbide/
+machine-api-provider-nico/
 ├── cmd/manager/          # Controller manager entry point
 ├── pkg/
-│   ├── apis/             # NvidiaCarbideMachineProviderSpec types
+│   ├── apis/             # NicoMachineProviderSpec types
 │   ├── actuators/        # Machine actuator implementation
 │   ├── providerid/       # Provider ID parsing and formatting
 │   └── controllers/      # Machine and MachineSet reconcilers
@@ -310,14 +310,14 @@ Check the controller logs:
 
 ```bash
 kubectl logs -n openshift-machine-api \
-  -l app=machine-api-provider-nvidia-carbide \
+  -l app=machine-api-provider-nico \
   --tail=100 -f
 ```
 
 Common issues:
 - Invalid credentials in secret
 - Incorrect site/tenant/VPC/subnet UUIDs
-- Network connectivity to NVIDIA Carbide API
+- Network connectivity to NICo API
 - Instance type not available in site
 
 ### Instance created but not joining cluster
@@ -333,7 +333,7 @@ Ensure the service account has proper RBAC:
 
 ```bash
 kubectl auth can-i get machines.machine.openshift.io \
-  --as=system:serviceaccount:openshift-machine-api:machine-api-provider-nvidia-carbide
+  --as=system:serviceaccount:openshift-machine-api:machine-api-provider-nico
 ```
 
 ## License
@@ -342,8 +342,8 @@ Apache 2.0
 
 ## Related Projects
 
-- [cluster-api-provider-nvidia-carbide](../cluster-api-provider-nvidia-carbide) - Cluster API provider for NVIDIA Carbide
-- [carbide-rest](../carbide-rest) - REST API client library
+- [cloud-provider-nvidia-ncx-infra-controller](../cloud-provider-nvidia-ncx-infra-controller) - Cloud Controller Manager for NICo
+- [ncx-infra-controller-rest](https://github.com/NVIDIA/ncx-infra-controller-rest) - NICo REST API and SDK
 
 ## Contributing
 

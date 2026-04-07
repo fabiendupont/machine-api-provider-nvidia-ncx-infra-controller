@@ -1,6 +1,6 @@
 # Image URL to use all building/pushing image targets
 VERSION ?= 0.1.0
-IMAGE_TAG_BASE ?= ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide
+IMAGE_TAG_BASE ?= ghcr.io/fabiendupont/machine-api-provider-nico
 IMG ?= $(IMAGE_TAG_BASE):latest
 BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-bundle:v$(VERSION)
 CATALOG_IMG ?= $(IMAGE_TAG_BASE)-catalog:v$(VERSION)
@@ -36,7 +36,7 @@ test: ## Run tests.
 	go test ./... -coverprofile cover.out
 
 .PHONY: test-e2e-live
-test-e2e-live: ## Run e2e tests against live Carbide API.
+test-e2e-live: ## Run e2e tests against live NICo API.
 	kind get kubeconfig --name carbide-rest-local > /tmp/carbide-e2e-kubeconfig
 	KUBECONFIG=/tmp/carbide-e2e-kubeconfig kubectl apply -f config/crd/external/
 	KUBECONFIG=/tmp/carbide-e2e-kubeconfig \

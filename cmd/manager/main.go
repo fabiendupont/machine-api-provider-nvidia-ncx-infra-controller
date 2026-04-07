@@ -31,9 +31,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/actuators/machine"
-	ncpv1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
-	machinecontroller "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/controllers/machine"
+	"github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/actuators/machine"
+	nicov1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/apis/nicoprovider/v1beta1"
+	machinecontroller "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/controllers/machine"
 )
 
 var (
@@ -44,7 +44,7 @@ var (
 func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = machinev1beta1.AddToScheme(scheme)
-	_ = ncpv1beta1.AddToScheme(scheme)
+	_ = nicov1beta1.AddToScheme(scheme)
 }
 
 func main() {
@@ -86,7 +86,7 @@ func main() {
 		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "machine-controller.nvidia-carbide.nvidia.com",
+		LeaderElectionID:       "machine-controller.nico.nvidia.com",
 	}
 
 	// Only configure the webhook server when webhooks are enabled
@@ -115,7 +115,7 @@ func main() {
 	// Create the actuator
 	actuator := machine.NewActuator(
 		mgr.GetClient(),
-		mgr.GetEventRecorderFor("nvidia-carbide-machine-controller"),
+		mgr.GetEventRecorderFor("nico-machine-controller"),
 	)
 
 	// Setup Machine reconciler
@@ -132,7 +132,7 @@ func main() {
 		mgr.GetWebhookServer().Register(
 			"/validate-machine",
 			&admission.Webhook{
-				Handler: &ncpv1beta1.MachineValidator{
+				Handler: &nicov1beta1.MachineValidator{
 					Decoder: admission.NewDecoder(scheme),
 				},
 			},

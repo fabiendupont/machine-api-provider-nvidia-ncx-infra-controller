@@ -23,12 +23,12 @@ import (
 func TestValidateProviderSpec(t *testing.T) {
 	tests := []struct {
 		name    string
-		spec    NvidiaCarbideMachineProviderSpec
+		spec    NicoMachineProviderSpec
 		wantErr bool
 	}{
 		{
 			name: "valid with instanceTypeId",
-			spec: NvidiaCarbideMachineProviderSpec{
+			spec: NicoMachineProviderSpec{
 				SiteID:         "550e8400-e29b-41d4-a716-446655440000",
 				TenantID:       "660e8400-e29b-41d4-a716-446655440001",
 				InstanceTypeID: "990e8400-e29b-41d4-a716-446655440004",
@@ -39,7 +39,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "both instanceTypeId and machineId",
-			spec: NvidiaCarbideMachineProviderSpec{
+			spec: NicoMachineProviderSpec{
 				SiteID:         "550e8400-e29b-41d4-a716-446655440000",
 				TenantID:       "660e8400-e29b-41d4-a716-446655440001",
 				InstanceTypeID: "990e8400-e29b-41d4-a716-446655440004",
@@ -51,7 +51,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "missing siteId",
-			spec: NvidiaCarbideMachineProviderSpec{
+			spec: NicoMachineProviderSpec{
 				TenantID:       "660e8400-e29b-41d4-a716-446655440001",
 				InstanceTypeID: "990e8400-e29b-41d4-a716-446655440004",
 				VpcID:          "770e8400-e29b-41d4-a716-446655440002",
@@ -61,7 +61,7 @@ func TestValidateProviderSpec(t *testing.T) {
 		},
 		{
 			name: "too many additional subnets",
-			spec: NvidiaCarbideMachineProviderSpec{
+			spec: NicoMachineProviderSpec{
 				SiteID:              "550e8400-e29b-41d4-a716-446655440000",
 				TenantID:            "660e8400-e29b-41d4-a716-446655440001",
 				InstanceTypeID:      "990e8400-e29b-41d4-a716-446655440004",
@@ -86,12 +86,12 @@ func TestValidateProviderSpec(t *testing.T) {
 func TestValidateUUIDs(t *testing.T) {
 	tests := []struct {
 		name    string
-		spec    NvidiaCarbideMachineProviderSpec
+		spec    NicoMachineProviderSpec
 		wantErr bool
 	}{
 		{
 			name: "valid UUIDs",
-			spec: NvidiaCarbideMachineProviderSpec{
+			spec: NicoMachineProviderSpec{
 				SiteID:         "550e8400-e29b-41d4-a716-446655440000",
 				TenantID:       "660e8400-e29b-41d4-a716-446655440001",
 				InstanceTypeID: "990e8400-e29b-41d4-a716-446655440004",
@@ -102,7 +102,7 @@ func TestValidateUUIDs(t *testing.T) {
 		},
 		{
 			name: "invalid siteId UUID",
-			spec: NvidiaCarbideMachineProviderSpec{
+			spec: NicoMachineProviderSpec{
 				SiteID:         "not-a-uuid",
 				TenantID:       "660e8400-e29b-41d4-a716-446655440001",
 				InstanceTypeID: "990e8400-e29b-41d4-a716-446655440004",
@@ -113,7 +113,7 @@ func TestValidateUUIDs(t *testing.T) {
 		},
 		{
 			name: "invalid optional operatingSystemId UUID",
-			spec: NvidiaCarbideMachineProviderSpec{
+			spec: NicoMachineProviderSpec{
 				SiteID:            "550e8400-e29b-41d4-a716-446655440000",
 				TenantID:          "660e8400-e29b-41d4-a716-446655440001",
 				InstanceTypeID:    "990e8400-e29b-41d4-a716-446655440004",
@@ -136,13 +136,13 @@ func TestValidateUUIDs(t *testing.T) {
 }
 
 func TestValidateImmutableFields(t *testing.T) {
-	oldSpec := &NvidiaCarbideMachineProviderSpec{
+	oldSpec := &NicoMachineProviderSpec{
 		SiteID:   "550e8400-e29b-41d4-a716-446655440000",
 		TenantID: "660e8400-e29b-41d4-a716-446655440001",
 	}
 
 	t.Run("same values allowed", func(t *testing.T) {
-		newSpec := &NvidiaCarbideMachineProviderSpec{
+		newSpec := &NicoMachineProviderSpec{
 			SiteID:   "550e8400-e29b-41d4-a716-446655440000",
 			TenantID: "660e8400-e29b-41d4-a716-446655440001",
 		}
@@ -152,7 +152,7 @@ func TestValidateImmutableFields(t *testing.T) {
 	})
 
 	t.Run("changed siteId rejected", func(t *testing.T) {
-		newSpec := &NvidiaCarbideMachineProviderSpec{
+		newSpec := &NicoMachineProviderSpec{
 			SiteID:   "different-site-id",
 			TenantID: "660e8400-e29b-41d4-a716-446655440001",
 		}
@@ -162,7 +162,7 @@ func TestValidateImmutableFields(t *testing.T) {
 	})
 
 	t.Run("changed tenantId rejected", func(t *testing.T) {
-		newSpec := &NvidiaCarbideMachineProviderSpec{
+		newSpec := &NicoMachineProviderSpec{
 			SiteID:   "550e8400-e29b-41d4-a716-446655440000",
 			TenantID: "different-tenant-id",
 		}

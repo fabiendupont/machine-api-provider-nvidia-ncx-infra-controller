@@ -79,7 +79,7 @@ func getKeycloakToken() string {
 	return tokenResp.AccessToken
 }
 
-// createCredentialsSecret creates a Kubernetes secret with NVIDIA Carbide API credentials.
+// createCredentialsSecret creates a Kubernetes secret with NICo API credentials.
 func createCredentialsSecret(ctx context.Context, k8sClient client.Client, name, namespace, token string) *corev1.Secret {
 	// Use the in-cluster endpoint if available (for controllers running inside the cluster),
 	// otherwise fall back to the external endpoint.
@@ -105,8 +105,8 @@ func createCredentialsSecret(ctx context.Context, k8sClient client.Client, name,
 	return secret
 }
 
-// carbideAPIRequest makes an authenticated request to the Carbide REST API.
-func carbideAPIRequest(method, path, token string, body interface{}) (map[string]interface{}, int) {
+// nicoAPIRequest makes an authenticated request to the NICo REST API.
+func nicoAPIRequest(method, path, token string, body interface{}) (map[string]interface{}, int) {
 	endpoint := os.Getenv("NVIDIA_CARBIDE_API_ENDPOINT")
 	Expect(endpoint).NotTo(BeEmpty())
 
@@ -139,13 +139,13 @@ func carbideAPIRequest(method, path, token string, body interface{}) (map[string
 	return result, resp.StatusCode
 }
 
-// createVPCViaAPI creates a VPC via the Carbide REST API and returns its ID.
+// createVPCViaAPI creates a VPC via the NICo REST API and returns its ID.
 func createVPCViaAPI(token, orgName, siteID, name string) string {
 	body := map[string]interface{}{
 		"name":   name,
 		"siteId": siteID,
 	}
-	result, status := carbideAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/vpc", orgName), token, body)
+	result, status := nicoAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/vpc", orgName), token, body)
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create VPC: %v", result)
 	vpcID, ok := result["id"].(string)
 	Expect(ok).To(BeTrue(), "VPC response missing id")
@@ -153,7 +153,7 @@ func createVPCViaAPI(token, orgName, siteID, name string) string {
 	return vpcID
 }
 
-// createIPBlockViaAPI creates an IP block via the Carbide REST API and returns its ID.
+// createIPBlockViaAPI creates an IP block via the NICo REST API and returns its ID.
 func createIPBlockViaAPI(token, orgName, siteID, name string) string {
 	body := map[string]interface{}{
 		"name":            name,
@@ -163,7 +163,7 @@ func createIPBlockViaAPI(token, orgName, siteID, name string) string {
 		"protocolVersion": "IPv4",
 		"routingType":     "DatacenterOnly",
 	}
-	result, status := carbideAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/ipblock", orgName), token, body)
+	result, status := nicoAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/ipblock", orgName), token, body)
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create IP block: %v", result)
 	ipBlockID, ok := result["id"].(string)
 	Expect(ok).To(BeTrue(), "IP block response missing id")
@@ -171,7 +171,7 @@ func createIPBlockViaAPI(token, orgName, siteID, name string) string {
 	return ipBlockID
 }
 
-// createSubnetViaAPI creates a subnet via the Carbide REST API and returns its ID.
+// createSubnetViaAPI creates a subnet via the NICo REST API and returns its ID.
 func createSubnetViaAPI(token, orgName, vpcID, ipBlockID, name string) string {
 	body := map[string]interface{}{
 		"name":         name,
@@ -179,7 +179,7 @@ func createSubnetViaAPI(token, orgName, vpcID, ipBlockID, name string) string {
 		"ipv4BlockId":  ipBlockID,
 		"prefixLength": 24,
 	}
-	result, status := carbideAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/subnet", orgName), token, body)
+	result, status := nicoAPIRequest("POST", fmt.Sprintf("/v2/org/%s/carbide/subnet", orgName), token, body)
 	Expect(status).To(Equal(http.StatusCreated), "Failed to create subnet: %v", result)
 	subnetID, ok := result["id"].(string)
 	Expect(ok).To(BeTrue(), "Subnet response missing id")
@@ -244,7 +244,7 @@ func ensureSubnetReady(subnetID string) {
 // getInfraProviderID retrieves the infrastructure provider ID for the org.
 func getInfraProviderID(token, orgName string) string {
 	apiBase := fmt.Sprintf("/v2/org/%s/carbide", orgName)
-	result, status := carbideAPIRequest("GET", apiBase+"/infrastructure-provider/current", token, nil)
+	result, status := nicoAPIRequest("GET", apiBase+"/infrastructure-provider/current", token, nil)
 	Expect(status).To(Equal(http.StatusOK), "Failed to get infrastructure provider: %v", result)
 	id := result["id"].(string)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Infrastructure Provider ID: %s\n", id)
@@ -277,8 +277,8 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID,
 	ensureSiteRegistered(siteID)
 
 	// Get or create Tenant (idempotent)
-	carbideAPIRequest("POST", apiBase+"/tenant", token, map[string]interface{}{"org": orgName})
-	currentTenant, tStatus := carbideAPIRequest("GET", apiBase+"/tenant/current", token, nil)
+	nicoAPIRequest("POST", apiBase+"/tenant", token, map[string]interface{}{"org": orgName})
+	currentTenant, tStatus := nicoAPIRequest("GET", apiBase+"/tenant/current", token, nil)
 	Expect(tStatus).To(Equal(http.StatusOK), "Failed to get current tenant: %v", currentTenant)
 	tenantID = currentTenant["id"].(string)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Tenant ID: %s\n", tenantID)
@@ -289,7 +289,7 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID,
 	ipBlockID := createIPBlockViaAPI(token, orgName, siteID, prefix+"-ipblock")
 
 	// Create Allocation for IPBlock
-	allocResult, status := carbideAPIRequest("POST", apiBase+"/allocation", token, map[string]interface{}{
+	allocResult, status := nicoAPIRequest("POST", apiBase+"/allocation", token, map[string]interface{}{
 		"name":     prefix + "-allocation",
 		"tenantId": tenantID,
 		"siteId":   siteID,
@@ -324,12 +324,12 @@ func setupInfrastructureViaAPI(token, orgName, prefix string) (siteID, tenantID,
 // cleanupInfrastructureViaAPI deletes the infrastructure created by setupInfrastructureViaAPI.
 func cleanupInfrastructureViaAPI(token, orgName, subnetID, vpcID, siteID string) {
 	if subnetID != "" {
-		carbideAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/subnet/%s", orgName, subnetID), token, nil)
+		nicoAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/subnet/%s", orgName, subnetID), token, nil)
 	}
 	if vpcID != "" {
-		carbideAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/vpc/%s", orgName, vpcID), token, nil)
+		nicoAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/vpc/%s", orgName, vpcID), token, nil)
 	}
 	if siteID != "" {
-		carbideAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/site/%s", orgName, siteID), token, nil)
+		nicoAPIRequest("DELETE", fmt.Sprintf("/v2/org/%s/carbide/site/%s", orgName, siteID), token, nil)
 	}
 }

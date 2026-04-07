@@ -19,6 +19,7 @@ package machine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,14 +36,14 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/apis/nvidiacarbideprovider/v1beta1"
-	carbidemetrics "github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/metrics"
-	"github.com/fabiendupont/machine-api-provider-nvidia-carbide/pkg/providerid"
+	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/apis/nicoprovider/v1beta1"
+	nicometrics "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/metrics"
+	"github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/providerid"
 	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
 )
 
-// NvidiaCarbideClientInterface defines the methods needed from NVIDIA Carbide REST client
-type NvidiaCarbideClientInterface interface {
+// NicoClientInterface defines the methods needed from NICo REST client
+type NicoClientInterface interface {
 	CreateInstance(
 		ctx context.Context, org string, req nico.InstanceCreateRequest,
 	) (*nico.Instance, *http.Response, error)
@@ -68,29 +69,29 @@ type NvidiaCarbideClientInterface interface {
 	) ([]nico.StatusDetail, *http.Response, error)
 }
 
-// carbideClient wraps the SDK APIClient and injects auth context
-type carbideClient struct {
+// nicoClient wraps the SDK APIClient and injects auth context
+type nicoClient struct {
 	client *nico.APIClient
 	token  string
 }
 
-func (c *carbideClient) authCtx(ctx context.Context) context.Context {
+func (c *nicoClient) authCtx(ctx context.Context) context.Context {
 	return context.WithValue(ctx, nico.ContextAccessToken, c.token)
 }
 
-func (c *carbideClient) CreateInstance(
+func (c *nicoClient) CreateInstance(
 	ctx context.Context, org string, req nico.InstanceCreateRequest,
 ) (*nico.Instance, *http.Response, error) {
 	return c.client.InstanceAPI.CreateInstance(c.authCtx(ctx), org).InstanceCreateRequest(req).Execute()
 }
 
-func (c *carbideClient) GetInstance(
+func (c *nicoClient) GetInstance(
 	ctx context.Context, org, instanceId string,
 ) (*nico.Instance, *http.Response, error) {
 	return c.client.InstanceAPI.GetInstance(c.authCtx(ctx), org, instanceId).Execute()
 }
 
-func (c *carbideClient) DeleteInstance(
+func (c *nicoClient) DeleteInstance(
 	ctx context.Context, org, instanceId string,
 	deleteReq *nico.InstanceDeleteRequest,
 ) (*http.Response, error) {
@@ -101,7 +102,7 @@ func (c *carbideClient) DeleteInstance(
 	return r.Execute()
 }
 
-func (c *carbideClient) UpdateInstance(
+func (c *nicoClient) UpdateInstance(
 	ctx context.Context, org, instanceId string,
 	req nico.InstanceUpdateRequest,
 ) (*nico.Instance, *http.Response, error) {
@@ -110,19 +111,19 @@ func (c *carbideClient) UpdateInstance(
 	).InstanceUpdateRequest(req).Execute()
 }
 
-func (c *carbideClient) GetMachine(
+func (c *nicoClient) GetMachine(
 	ctx context.Context, org, machineId string,
 ) (*nico.Machine, *http.Response, error) {
 	return c.client.MachineAPI.GetMachine(c.authCtx(ctx), org, machineId).Execute()
 }
 
-func (c *carbideClient) GetCurrentTenant(
+func (c *nicoClient) GetCurrentTenant(
 	ctx context.Context, org string,
 ) (*nico.Tenant, *http.Response, error) {
 	return c.client.TenantAPI.GetCurrentTenant(c.authCtx(ctx), org).Execute()
 }
 
-func (c *carbideClient) GetInstanceStatusHistory(
+func (c *nicoClient) GetInstanceStatusHistory(
 	ctx context.Context, org, instanceId string,
 ) ([]nico.StatusDetail, *http.Response, error) {
 	return c.client.InstanceAPI.GetInstanceStatusHistory(c.authCtx(ctx), org, instanceId).Execute()
@@ -130,12 +131,45 @@ func (c *carbideClient) GetInstanceStatusHistory(
 
 const statusCodeUnknown = "unknown"
 
+// APIErrorKind classifies NICo API errors for retry decisions.
+type APIErrorKind int
+
+const (
+	// ErrorTransient indicates a retryable error (network, 429, 5xx).
+	ErrorTransient APIErrorKind = iota
+	// ErrorTerminal indicates a non-retryable error (400 bad request).
+	ErrorTerminal
+)
+
+// ClassifiedError wraps an error with a classification for retry logic.
+type ClassifiedError struct {
+	Kind    APIErrorKind
+	wrapped error
+}
+
+func (e *ClassifiedError) Error() string { return e.wrapped.Error() }
+func (e *ClassifiedError) Unwrap() error { return e.wrapped }
+
+// classifyHTTPError wraps an error with transient/terminal classification
+// based on the HTTP status code.
+func classifyHTTPError(httpResp *http.Response, err error) error {
+	if httpResp == nil {
+		return &ClassifiedError{Kind: ErrorTransient, wrapped: err}
+	}
+	switch {
+	case httpResp.StatusCode == 400:
+		return &ClassifiedError{Kind: ErrorTerminal, wrapped: err}
+	default:
+		return &ClassifiedError{Kind: ErrorTransient, wrapped: err}
+	}
+}
+
 // Actuator implements the OpenShift Machine actuator interface
 type Actuator struct {
 	client        client.Client
 	eventRecorder record.EventRecorder
 	// For testing
-	nvidiaCarbideClient NvidiaCarbideClientInterface
+	nicoAPIClient NicoClientInterface
 	orgName             string
 }
 
@@ -150,18 +184,18 @@ func NewActuator(k8sClient client.Client, eventRecorder record.EventRecorder) *A
 // NewActuatorWithClient creates a new machine actuator with injected client (for testing)
 func NewActuatorWithClient(
 	k8sClient client.Client, eventRecorder record.EventRecorder,
-	nvidiaCarbideClient NvidiaCarbideClientInterface, orgName string,
+	nicoAPIClient NicoClientInterface, orgName string,
 ) *Actuator {
 	return &Actuator{
 		client:              k8sClient,
 		eventRecorder:       eventRecorder,
-		nvidiaCarbideClient: nvidiaCarbideClient,
+		nicoAPIClient: nicoAPIClient,
 		orgName:             orgName,
 	}
 }
 
 // validateProviderSpec validates the provider spec fields before making API calls.
-func validateProviderSpec(spec *v1beta1.NvidiaCarbideMachineProviderSpec) error {
+func validateProviderSpec(spec *v1beta1.NicoMachineProviderSpec) error {
 	if spec.InstanceTypeID != "" && spec.MachineID != "" {
 		return fmt.Errorf("specify either instanceTypeId or machineId, not both")
 	}
@@ -190,7 +224,7 @@ func validateProviderSpec(spec *v1beta1.NvidiaCarbideMachineProviderSpec) error 
 // buildInstanceRequest constructs the API request body from a provider spec.
 func buildInstanceRequest(
 	name string,
-	providerSpec *v1beta1.NvidiaCarbideMachineProviderSpec,
+	providerSpec *v1beta1.NicoMachineProviderSpec,
 ) nico.InstanceCreateRequest {
 	interfaces := []nico.InterfaceCreateRequest{
 		{
@@ -232,7 +266,7 @@ func buildInstanceRequest(
 	if providerSpec.OperatingSystemID != "" {
 		req.OperatingSystemId = *nico.NewNullableString(&providerSpec.OperatingSystemID)
 	} else {
-		ipxeScript := "#!ipxe\necho Booting via Carbide"
+		ipxeScript := "#!ipxe\necho Booting via NICo"
 		req.IpxeScript = *nico.NewNullableString(&ipxeScript)
 	}
 	if len(providerSpec.SSHKeyGroupIDs) > 0 {
@@ -310,15 +344,15 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 		return fmt.Errorf("invalid provider spec: %w", err)
 	}
 
-	// Get NVIDIA Carbide client and orgName
-	nvidiaCarbideClient, orgName, err := a.getNvidiaCarbideClient(ctx, providerSpec)
+	// Get NICo client and orgName
+	nicoAPIClient, orgName, err := a.getNicoClient(ctx, providerSpec)
 	if err != nil {
-		return fmt.Errorf("failed to create NVIDIA Carbide client: %w", err)
+		return fmt.Errorf("failed to create NICo client: %w", err)
 	}
 
 	// Validate tenant capabilities for targeted provisioning
 	if providerSpec.MachineID != "" {
-		tenant, _, tenantErr := nvidiaCarbideClient.GetCurrentTenant(ctx, orgName)
+		tenant, _, tenantErr := nicoAPIClient.GetCurrentTenant(ctx, orgName)
 		if tenantErr == nil && tenant != nil && tenant.Capabilities != nil {
 			if tenant.Capabilities.TargetedInstanceCreation != nil && !*tenant.Capabilities.TargetedInstanceCreation {
 				return fmt.Errorf("tenant does not have targeted instance creation enabled; cannot use machineId")
@@ -330,9 +364,11 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	instanceReq := buildInstanceRequest(machineObj.GetName(), providerSpec)
 
 	// Create instance
-	instance, httpResp, err := nvidiaCarbideClient.CreateInstance(
+	createStart := time.Now()
+	instance, httpResp, err := nicoAPIClient.CreateInstance(
 		ctx, orgName, instanceReq,
 	)
+	nicometrics.APILatency.WithLabelValues("CreateInstance").Observe(time.Since(createStart).Seconds())
 	if err != nil {
 		return a.handleCreateError(machineObj, httpResp, err)
 	}
@@ -349,7 +385,7 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	}
 
 	// Build provider status
-	providerStatus := &v1beta1.NvidiaCarbideMachineProviderStatus{
+	providerStatus := &v1beta1.NicoMachineProviderStatus{
 		InstanceID: instance.Id,
 	}
 
@@ -395,14 +431,14 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	// Deploy DPU extension services if specified
 	if len(providerSpec.DpuExtensionServices) > 0 {
 		if err := a.deployDpuExtensionServices(
-			ctx, nvidiaCarbideClient, orgName,
+			ctx, nicoAPIClient, orgName,
 			machineObj, *instance.Id, providerSpec,
 		); err != nil {
 			return err
 		}
 	}
 
-	carbidemetrics.MachinesManaged.Inc()
+	nicometrics.MachinesManaged.Inc()
 	if a.eventRecorder != nil {
 		a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "Created", "Created instance %s", *instance.Id)
 	}
@@ -432,14 +468,16 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 		return fmt.Errorf("instance ID not set in provider status")
 	}
 
-	// Get NVIDIA Carbide client and orgName
-	nvidiaCarbideClient, orgName, err := a.getNvidiaCarbideClient(ctx, providerSpec)
+	// Get NICo client and orgName
+	nicoAPIClient, orgName, err := a.getNicoClient(ctx, providerSpec)
 	if err != nil {
-		return fmt.Errorf("failed to create NVIDIA Carbide client: %w", err)
+		return fmt.Errorf("failed to create NICo client: %w", err)
 	}
 
 	// Get current instance status
-	instance, httpResp, err := nvidiaCarbideClient.GetInstance(ctx, orgName, *providerStatus.InstanceID)
+	getStart := time.Now()
+	instance, httpResp, err := nicoAPIClient.GetInstance(ctx, orgName, *providerStatus.InstanceID)
+	nicometrics.APILatency.WithLabelValues("GetInstance").Observe(time.Since(getStart).Seconds())
 	if err != nil {
 		return fmt.Errorf("failed to get instance: %w", err)
 	}
@@ -453,16 +491,30 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 		status := string(*instance.Status)
 		providerStatus.InstanceState = &status
 		setInstanceStateConditions(providerStatus, *instance.Status)
+
+		// Record provision duration when instance reaches Ready
+		if *instance.Status == nico.INSTANCESTATUS_READY {
+			for _, c := range providerStatus.Conditions {
+				if c.Type == "InstanceProvisioned" && !c.LastTransitionTime.IsZero() {
+					nicometrics.InstanceProvisionDuration.WithLabelValues("").Observe(
+						time.Since(c.LastTransitionTime.Time).Seconds())
+					break
+				}
+			}
+		}
 	}
 	if instance.MachineId.Get() != nil {
 		providerStatus.MachineID = instance.MachineId.Get()
 	}
 
 	// Check machine health if a physical machine is assigned
-	a.updateMachineHealth(ctx, nvidiaCarbideClient, orgName, instance, providerStatus)
+	a.updateMachineHealth(ctx, nicoAPIClient, orgName, instance, providerStatus)
 
 	// Record status history as events when instance is stuck or in error
-	a.checkStatusHistory(ctx, nvidiaCarbideClient, orgName, machineObj, instance)
+	a.checkStatusHistory(ctx, nicoAPIClient, orgName, machineObj, instance)
+
+	// Check provisioning timeout
+	a.checkProvisioningTimeout(machineObj, instance, providerStatus)
 
 	// Update addresses
 	providerStatus.Addresses = []v1beta1.MachineAddress{}
@@ -505,14 +557,14 @@ func (a *Actuator) Exists(ctx context.Context, machine runtime.Object) (bool, er
 		return false, fmt.Errorf("failed to get provider spec: %w", err)
 	}
 
-	// Get NVIDIA Carbide client and orgName
-	nvidiaCarbideClient, orgName, err := a.getNvidiaCarbideClient(ctx, providerSpec)
+	// Get NICo client and orgName
+	nicoAPIClient, orgName, err := a.getNicoClient(ctx, providerSpec)
 	if err != nil {
-		return false, fmt.Errorf("failed to create NVIDIA Carbide client: %w", err)
+		return false, fmt.Errorf("failed to create NICo client: %w", err)
 	}
 
 	// Check if instance exists
-	instance, httpResp, err := nvidiaCarbideClient.GetInstance(ctx, orgName, *providerStatus.InstanceID)
+	instance, httpResp, err := nicoAPIClient.GetInstance(ctx, orgName, *providerStatus.InstanceID)
 	if err != nil {
 		if httpResp != nil && httpResp.StatusCode == http.StatusNotFound {
 			return false, nil
@@ -548,10 +600,10 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		return nil
 	}
 
-	// Get NVIDIA Carbide client and orgName
-	nvidiaCarbideClient, orgName, err := a.getNvidiaCarbideClient(ctx, providerSpec)
+	// Get NICo client and orgName
+	nicoAPIClient, orgName, err := a.getNicoClient(ctx, providerSpec)
 	if err != nil {
-		return fmt.Errorf("failed to create NVIDIA Carbide client: %w", err)
+		return fmt.Errorf("failed to create NICo client: %w", err)
 	}
 
 	// Check if this deletion is triggered by MachineHealthCheck remediation
@@ -565,12 +617,14 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		}
 		if a.eventRecorder != nil {
 			a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "MHCRemediation",
-				"Reporting machine health issue to Carbide for break-fix workflow")
+				"Reporting machine health issue to NICo for break-fix workflow")
 		}
 	}
 
 	// Delete instance
-	httpResp, err := nvidiaCarbideClient.DeleteInstance(ctx, orgName, *providerStatus.InstanceID, deleteReq)
+	deleteStart := time.Now()
+	httpResp, err := nicoAPIClient.DeleteInstance(ctx, orgName, *providerStatus.InstanceID, deleteReq)
+	nicometrics.APILatency.WithLabelValues("DeleteInstance").Observe(time.Since(deleteStart).Seconds())
 	if err != nil {
 		statusCode := statusCodeUnknown
 		if httpResp != nil {
@@ -583,7 +637,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 					"Instance %s already deleted (404)", *providerStatus.InstanceID)
 			}
 		} else {
-			carbidemetrics.APICallErrors.WithLabelValues("DeleteInstance", statusCode).Inc()
+			nicometrics.APICallErrors.WithLabelValues("DeleteInstance", statusCode).Inc()
 			if a.eventRecorder != nil {
 				a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedDelete", "Failed to delete instance: %v", err)
 			}
@@ -599,7 +653,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		return fmt.Errorf("delete instance returned unexpected status: %d", httpResp.StatusCode)
 	}
 
-	carbidemetrics.MachinesManaged.Dec()
+	nicometrics.MachinesManaged.Dec()
 	if a.eventRecorder != nil {
 		a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "Deleted",
 			"Deleted instance %s", *providerStatus.InstanceID)
@@ -609,7 +663,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 
 // Helper functions
 
-func (a *Actuator) getProviderSpec(machine client.Object) (*v1beta1.NvidiaCarbideMachineProviderSpec, error) {
+func (a *Actuator) getProviderSpec(machine client.Object) (*v1beta1.NicoMachineProviderSpec, error) {
 	var providerSpecBytes []byte
 
 	switch m := machine.(type) {
@@ -631,7 +685,7 @@ func (a *Actuator) getProviderSpec(machine client.Object) (*v1beta1.NvidiaCarbid
 		return nil, fmt.Errorf("unsupported machine type: %T", machine)
 	}
 
-	providerSpec := &v1beta1.NvidiaCarbideMachineProviderSpec{}
+	providerSpec := &v1beta1.NicoMachineProviderSpec{}
 	if err := json.Unmarshal(providerSpecBytes, providerSpec); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal providerSpec: %w", err)
 	}
@@ -639,13 +693,13 @@ func (a *Actuator) getProviderSpec(machine client.Object) (*v1beta1.NvidiaCarbid
 	return providerSpec, nil
 }
 
-func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NvidiaCarbideMachineProviderStatus, error) {
+func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NicoMachineProviderStatus, error) {
 	var providerStatusBytes []byte
 
 	switch m := machine.(type) {
 	case *machinev1beta1.Machine:
 		if m.Status.ProviderStatus == nil {
-			return &v1beta1.NvidiaCarbideMachineProviderStatus{}, nil
+			return &v1beta1.NicoMachineProviderStatus{}, nil
 		}
 		providerStatusBytes = m.Status.ProviderStatus.Raw
 	case *unstructured.Unstructured:
@@ -654,7 +708,7 @@ func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NvidiaCarb
 			return nil, fmt.Errorf("failed to get providerStatus: %w", err)
 		}
 		if !found {
-			return &v1beta1.NvidiaCarbideMachineProviderStatus{}, nil
+			return &v1beta1.NicoMachineProviderStatus{}, nil
 		}
 		providerStatusBytes, err = json.Marshal(providerStatusValue)
 		if err != nil {
@@ -664,7 +718,7 @@ func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NvidiaCarb
 		return nil, fmt.Errorf("unsupported machine type: %T", machine)
 	}
 
-	providerStatus := &v1beta1.NvidiaCarbideMachineProviderStatus{}
+	providerStatus := &v1beta1.NicoMachineProviderStatus{}
 	if err := json.Unmarshal(providerStatusBytes, providerStatus); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal providerStatus: %w", err)
 	}
@@ -674,7 +728,7 @@ func (a *Actuator) getProviderStatus(machine client.Object) (*v1beta1.NvidiaCarb
 
 func (a *Actuator) setProviderStatus(
 	ctx context.Context, machine client.Object,
-	status *v1beta1.NvidiaCarbideMachineProviderStatus,
+	status *v1beta1.NicoMachineProviderStatus,
 ) error {
 	statusBytes, err := json.Marshal(status)
 	if err != nil {
@@ -726,12 +780,12 @@ func (a *Actuator) setProviderID(ctx context.Context, machine client.Object, pro
 	return nil
 }
 
-func (a *Actuator) getNvidiaCarbideClient(
-	ctx context.Context, providerSpec *v1beta1.NvidiaCarbideMachineProviderSpec,
-) (NvidiaCarbideClientInterface, string, error) {
+func (a *Actuator) getNicoClient(
+	ctx context.Context, providerSpec *v1beta1.NicoMachineProviderSpec,
+) (NicoClientInterface, string, error) {
 	// Use injected client for testing
-	if a.nvidiaCarbideClient != nil {
-		return a.nvidiaCarbideClient, a.orgName, nil
+	if a.nicoAPIClient != nil {
+		return a.nicoAPIClient, a.orgName, nil
 	}
 
 	// Fetch credentials secret
@@ -759,13 +813,13 @@ func (a *Actuator) getNvidiaCarbideClient(
 		return nil, "", fmt.Errorf("secret %s is missing 'token' field", secretKey.Name)
 	}
 
-	// Create NVIDIA Carbide API client
+	// Create NICo API client
 	sdkCfg := nico.NewConfiguration()
 	sdkCfg.Servers = nico.ServerConfigurations{
 		{URL: string(endpoint)},
 	}
 
-	return &carbideClient{
+	return &nicoClient{
 		client: nico.NewAPIClient(sdkCfg),
 		token:  string(token),
 	}, string(orgName), nil
@@ -776,11 +830,11 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
-// setInstanceStateConditions maps Carbide InstanceStatus values to provider
+// setInstanceStateConditions maps NICo InstanceStatus values to provider
 // status conditions. The SDK defines: Pending, Provisioning, Configuring,
 // Ready, Updating, Rebooting, Terminating, Error.
 func setInstanceStateConditions(
-	providerStatus *v1beta1.NvidiaCarbideMachineProviderStatus,
+	providerStatus *v1beta1.NicoMachineProviderStatus,
 	status nico.InstanceStatus,
 ) {
 	switch status {
@@ -794,7 +848,7 @@ func setInstanceStateConditions(
 		setCondition(providerStatus, "InstanceAllocating", metav1.ConditionFalse,
 			"Allocated", "Instance has been allocated")
 		setCondition(providerStatus, "InstanceProvisioning", metav1.ConditionTrue,
-			"Provisioning", "Carbide is provisioning the machine")
+			"Provisioning", "NICo is provisioning the machine")
 		setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
 			"Provisioning", "Instance is being provisioned")
 
@@ -839,7 +893,7 @@ func setInstanceStateConditions(
 }
 
 func setCondition(
-	providerStatus *v1beta1.NvidiaCarbideMachineProviderStatus,
+	providerStatus *v1beta1.NicoMachineProviderStatus,
 	condType string, status metav1.ConditionStatus, reason, message string,
 ) {
 	meta.SetStatusCondition(&providerStatus.Conditions, metav1.Condition{
@@ -851,7 +905,7 @@ func setCondition(
 }
 
 // handleCreateError processes API errors from CreateInstance, recording
-// metrics and events and returning a descriptive error.
+// metrics and events and returning a classified error.
 func (a *Actuator) handleCreateError(
 	machineObj client.Object, httpResp *http.Response, err error,
 ) error {
@@ -859,14 +913,24 @@ func (a *Actuator) handleCreateError(
 	if httpResp != nil {
 		statusCode = strconv.Itoa(httpResp.StatusCode)
 	}
-	carbidemetrics.APICallErrors.WithLabelValues(
+	nicometrics.APICallErrors.WithLabelValues(
 		"CreateInstance", statusCode,
 	).Inc()
+
+	errKind := "transient"
+	classified := classifyHTTPError(httpResp, err)
+	var ce *ClassifiedError
+	if errors.As(classified, &ce) && ce.Kind == ErrorTerminal {
+		errKind = "terminal"
+	}
+
 	if a.eventRecorder != nil {
 		a.eventRecorder.Eventf(machineObj,
 			corev1.EventTypeWarning, "FailedCreate",
-			"Failed to create instance: %v", err)
+			"NICo API error (%s): %v", errKind, err)
 	}
+
+	var wrappedErr error
 	if httpResp != nil && httpResp.Body != nil {
 		respBody, _ := io.ReadAll(httpResp.Body)
 		type apiError struct {
@@ -876,28 +940,31 @@ func (a *Actuator) handleCreateError(
 		var parsedErr apiError
 		if json.Unmarshal(respBody, &parsedErr) == nil &&
 			parsedErr.Message != "" {
-			return fmt.Errorf(
+			wrappedErr = fmt.Errorf(
 				"failed to create instance (status %d): %s: %w",
 				httpResp.StatusCode, parsedErr.Message, err,
 			)
+		} else {
+			wrappedErr = fmt.Errorf(
+				"failed to create instance (status %d): %w",
+				httpResp.StatusCode, err,
+			)
 		}
-		return fmt.Errorf(
-			"failed to create instance (status %d): %w",
-			httpResp.StatusCode, err,
-		)
+	} else {
+		wrappedErr = fmt.Errorf("failed to create instance: %w", err)
 	}
-	return fmt.Errorf("failed to create instance: %w", err)
+	return classifyHTTPError(httpResp, wrappedErr)
 }
 
 // deployDpuExtensionServices deploys DPU extension services on a newly
 // created instance via the UpdateInstance API.
 func (a *Actuator) deployDpuExtensionServices(
 	ctx context.Context,
-	nvidiaCarbideClient NvidiaCarbideClientInterface,
+	nicoAPIClient NicoClientInterface,
 	orgName string,
 	machineObj client.Object,
 	instanceID string,
-	providerSpec *v1beta1.NvidiaCarbideMachineProviderSpec,
+	providerSpec *v1beta1.NicoMachineProviderSpec,
 ) error {
 	dpuDeployments := make(
 		[]nico.DpuExtensionServiceDeploymentRequest,
@@ -915,7 +982,7 @@ func (a *Actuator) deployDpuExtensionServices(
 	updateReq := nico.InstanceUpdateRequest{
 		DpuExtensionServiceDeployments: dpuDeployments,
 	}
-	_, updateResp, updateErr := nvidiaCarbideClient.UpdateInstance(
+	_, updateResp, updateErr := nicoAPIClient.UpdateInstance(
 		ctx, orgName, instanceID, updateReq,
 	)
 	if updateErr != nil {
@@ -923,7 +990,7 @@ func (a *Actuator) deployDpuExtensionServices(
 		if updateResp != nil {
 			statusCode = strconv.Itoa(updateResp.StatusCode)
 		}
-		carbidemetrics.APICallErrors.WithLabelValues(
+		nicometrics.APICallErrors.WithLabelValues(
 			"UpdateInstance", statusCode,
 		).Inc()
 		if a.eventRecorder != nil {
@@ -949,12 +1016,16 @@ func (a *Actuator) deployDpuExtensionServices(
 // is considered stuck and status history is emitted as Warning events.
 const provisioningStuckThreshold = 5 * time.Minute
 
+// ProvisioningTimeout is the maximum duration to wait for an instance to reach
+// Ready state before setting FailureReason. Exported for testing.
+var ProvisioningTimeout = 30 * time.Minute
+
 // checkStatusHistory fetches the instance status history and records transitions
 // as Warning events when the instance is in Error state or has been Provisioning
 // for more than 5 minutes. This aids debugging without direct API access.
 func (a *Actuator) checkStatusHistory(
 	ctx context.Context,
-	nvidiaCarbideClient NvidiaCarbideClientInterface,
+	nicoAPIClient NicoClientInterface,
 	orgName string,
 	machineObj client.Object,
 	instance *nico.Instance,
@@ -978,7 +1049,7 @@ func (a *Actuator) checkStatusHistory(
 		return
 	}
 
-	history, httpResp, err := nvidiaCarbideClient.GetInstanceStatusHistory(ctx, orgName, *instance.Id)
+	history, httpResp, err := nicoAPIClient.GetInstanceStatusHistory(ctx, orgName, *instance.Id)
 	if err != nil || httpResp == nil || httpResp.StatusCode != http.StatusOK || len(history) == 0 {
 		return
 	}
@@ -1025,6 +1096,48 @@ func (a *Actuator) checkStatusHistory(
 	}
 }
 
+// checkProvisioningTimeout sets FailureReason on the Machine if the instance
+// has been stuck in a non-Ready state beyond ProvisioningTimeout.
+func (a *Actuator) checkProvisioningTimeout(
+	machineObj client.Object,
+	instance *nico.Instance,
+	providerStatus *v1beta1.NicoMachineProviderStatus,
+) {
+	if instance.Status == nil {
+		return
+	}
+	// Only check timeout for non-terminal, non-ready states
+	switch *instance.Status {
+	case nico.INSTANCESTATUS_PENDING, nico.INSTANCESTATUS_PROVISIONING, nico.INSTANCESTATUS_CONFIGURING:
+		// continue
+	default:
+		return
+	}
+
+	// Find the InstanceProvisioned condition set during Create
+	for _, c := range providerStatus.Conditions {
+		if c.Type == "InstanceProvisioned" && !c.LastTransitionTime.IsZero() {
+			if time.Since(c.LastTransitionTime.Time) > ProvisioningTimeout {
+				setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
+					"ProvisioningTimeout",
+					fmt.Sprintf("Instance has not reached Ready state after %s", ProvisioningTimeout))
+				// Set failure on the Machine object if it's a typed Machine
+				if m, ok := machineObj.(*machinev1beta1.Machine); ok {
+					reason := "ProvisioningTimeout"
+					msg := fmt.Sprintf("Instance stuck in %s state for more than %s", string(*instance.Status), ProvisioningTimeout)
+					m.Status.ErrorReason = (*machinev1beta1.MachineStatusError)(&reason)
+					m.Status.ErrorMessage = &msg
+				}
+				if a.eventRecorder != nil {
+					a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "ProvisioningTimeout",
+						"Instance has not reached Ready state after %s, setting FailureReason", ProvisioningTimeout)
+				}
+			}
+			break
+		}
+	}
+}
+
 // isMHCRemediation detects if the Machine deletion was triggered by
 // OpenShift MachineHealthCheck remediation. MHC sets the annotation
 // "machine.openshift.io/unhealthy" on the Machine before requesting deletion.
@@ -1037,22 +1150,22 @@ func isMHCRemediation(machine client.Object) bool {
 	return hasUnhealthy
 }
 
-// updateMachineHealth queries the Carbide Machine API for health data and
+// updateMachineHealth queries the NICo Machine API for health data and
 // sets the MachineHealthy condition. Health failures are non-fatal — they
 // are logged but do not block the Update.
 func (a *Actuator) updateMachineHealth(
 	ctx context.Context,
-	nvidiaCarbideClient NvidiaCarbideClientInterface,
+	nicoAPIClient NicoClientInterface,
 	orgName string,
 	instance *nico.Instance,
-	providerStatus *v1beta1.NvidiaCarbideMachineProviderStatus,
+	providerStatus *v1beta1.NicoMachineProviderStatus,
 ) {
 	machineID, ok := instance.GetMachineIdOk()
 	if !ok || machineID == nil || *machineID == "" {
 		return
 	}
 
-	machine, httpResp, err := nvidiaCarbideClient.GetMachine(ctx, orgName, *machineID)
+	machine, httpResp, err := nicoAPIClient.GetMachine(ctx, orgName, *machineID)
 	if err != nil || httpResp == nil || httpResp.StatusCode != http.StatusOK || machine == nil {
 		return
 	}
@@ -1065,15 +1178,15 @@ func (a *Actuator) updateMachineHealth(
 		setCondition(providerStatus, "MachineHealthy", metav1.ConditionTrue,
 			"Healthy", "Machine has no health alerts")
 		providerStatus.HealthLabels = map[string]string{
-			"nvidia-carbide.io/healthy": "true",
+			"nico.io/healthy": "true",
 		}
 	} else {
 		alertMsg := fmt.Sprintf("Machine has %d health alert(s)", len(machine.Health.Alerts))
 		setCondition(providerStatus, "MachineHealthy", metav1.ConditionFalse,
 			"Unhealthy", alertMsg)
 		providerStatus.HealthLabels = map[string]string{
-			"nvidia-carbide.io/healthy":            "false",
-			"nvidia-carbide.io/health-alert-count": fmt.Sprintf("%d", len(machine.Health.Alerts)),
+			"nico.io/healthy":            "false",
+			"nico.io/health-alert-count": fmt.Sprintf("%d", len(machine.Health.Alerts)),
 		}
 	}
 }

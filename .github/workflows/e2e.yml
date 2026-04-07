@@ -15,7 +15,7 @@ jobs:
       NVIDIA_CARBIDE_API_ENDPOINT: http://localhost:8388
       NVIDIA_CARBIDE_KEYCLOAK_URL: http://localhost:8082
       NVIDIA_CARBIDE_API_ENDPOINT_INTERNAL: http://carbide-rest-api.carbide-rest.svc:8388
-      IMG: localhost/machine-api-provider-nvidia-carbide:e2e
+      IMG: localhost/machine-api-provider-nico:e2e
     steps:
       - name: Checkout provider
         uses: actions/checkout@v4
@@ -46,14 +46,14 @@ jobs:
       - name: Increase inotify limits
         run: sudo sysctl -w fs.inotify.max_user_instances=512
 
-      - name: Deploy Carbide REST stack
+      - name: Deploy NICo REST stack
         run: make kind-reset
         working-directory: ncx-infra-controller-rest
         timeout-minutes: 20
         env:
           KUBECONFIG: ""
 
-      - name: Verify Carbide API health
+      - name: Verify NICo API health
         run: |
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8388/healthz; then
@@ -80,11 +80,11 @@ jobs:
         run: |
           kubectl apply -f config/manager/namespace.yaml
           kubectl apply -f config/rbac/
-          sed -i "s|ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide:latest|$IMG|" \
+          sed -i "s|ghcr.io/fabiendupont/machine-api-provider-nico:latest|$IMG|" \
             config/manager/deployment.yaml
           kubectl apply -f config/manager/
           kubectl wait --for=condition=Available deployment/controller-manager \
-            -n machine-api-provider-nvidia-carbide-system --timeout=5m
+            -n machine-api-provider-nico-system --timeout=5m
 
       - name: Run e2e tests
         run: make test-e2e-live
@@ -94,6 +94,6 @@ jobs:
         run: |
           echo "=== Controller logs ==="
           kubectl logs -l control-plane=controller-manager \
-            -n machine-api-provider-nvidia-carbide-system --tail=200
+            -n machine-api-provider-nico-system --tail=200
           echo "=== Machine objects ==="
           kubectl get machines.machine.openshift.io -A -o yaml || true

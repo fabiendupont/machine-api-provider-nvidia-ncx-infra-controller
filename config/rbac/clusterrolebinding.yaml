@@ -1,12 +1,12 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: machine-api-provider-nvidia-carbide-manager-rolebinding
+  name: machine-api-provider-nico-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: machine-api-provider-nvidia-carbide-manager-role
+  name: machine-api-provider-nico-manager-role
 subjects:
   - kind: ServiceAccount
-    name: machine-api-provider-nvidia-carbide-controller-manager
-    namespace: machine-api-provider-nvidia-carbide-system
+    name: machine-api-provider-nico-controller-manager
+    namespace: machine-api-provider-nico-system

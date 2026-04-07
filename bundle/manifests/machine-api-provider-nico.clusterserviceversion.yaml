@@ -3,7 +3,7 @@ kind: ClusterServiceVersion
 metadata:
   annotations:
     alm-examples: '[]'
-  name: machine-api-provider-nvidia-carbide.v0.1.0
+  name: machine-api-provider-nico.v0.1.0
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -11,7 +11,7 @@ spec:
     owned: []
   description: |
     OpenShift Machine API actuator for provisioning bare-metal machines on
-    NVIDIA Carbide platform.
+    NICo platform.
 
     This provider implements the OpenShift Machine API actuator interface,
     enabling:
@@ -20,9 +20,9 @@ spec:
     - **Automated scaling** via MachineSet controllers
     - **Integration with OpenShift cluster lifecycle** and machine management
 
-    The provider translates OpenShift Machine API requests into NVIDIA Carbide
+    The provider translates OpenShift Machine API requests into NICo
     REST API calls, managing the full lifecycle of bare-metal instances.
-  displayName: Machine API Provider NVIDIA Carbide
+  displayName: Machine API Provider NICo
   icon:
     - base64data: ""
       mediatype: image/svg+xml
@@ -77,20 +77,20 @@ spec:
                 - get
                 - list
                 - watch
-          serviceAccountName: machine-api-provider-nvidia-carbide
+          serviceAccountName: machine-api-provider-nico
       deployments:
         - label:
-            app: machine-api-provider-nvidia-carbide
-          name: machine-api-provider-nvidia-carbide
+            app: machine-api-provider-nico
+          name: machine-api-provider-nico
           spec:
             replicas: 1
             selector:
               matchLabels:
-                app: machine-api-provider-nvidia-carbide
+                app: machine-api-provider-nico
             template:
               metadata:
                 labels:
-                  app: machine-api-provider-nvidia-carbide
+                  app: machine-api-provider-nico
               spec:
                 containers:
                   - args:
@@ -99,7 +99,7 @@ spec:
                       - --metrics-bind-address=:8080
                     command:
                       - /manager
-                    image: ghcr.io/fabiendupont/machine-api-provider-nvidia-carbide:v0.1.0
+                    image: ghcr.io/fabiendupont/machine-api-provider-nico:v0.1.0
                     livenessProbe:
                       httpGet:
                         path: /healthz
@@ -130,7 +130,7 @@ spec:
                   runAsNonRoot: true
                   seccompProfile:
                     type: RuntimeDefault
-                serviceAccountName: machine-api-provider-nvidia-carbide
+                serviceAccountName: machine-api-provider-nico
                 terminationGracePeriodSeconds: 10
       permissions:
         - rules:
@@ -165,7 +165,7 @@ spec:
               verbs:
                 - create
                 - patch
-          serviceAccountName: machine-api-provider-nvidia-carbide
+          serviceAccountName: machine-api-provider-nico
     strategy: deployment
   installModes:
     - supported: true
@@ -179,12 +179,12 @@ spec:
   keywords:
     - machine-api
     - nvidia
-    - carbide
+    - nico
     - bare-metal
     - openshift
   links:
     - name: Source Code
-      url: https://github.com/fabiendupont/machine-api-provider-nvidia-carbide
+      url: https://github.com/fabiendupont/machine-api-provider-nico
   maintainers:
     - email: fdupont@nvidia.com
       name: Fabien Dupont

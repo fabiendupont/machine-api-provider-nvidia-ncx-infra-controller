@@ -1,7 +1,7 @@
 apiVersion: machine.openshift.io/v1beta1
 kind: Machine
 metadata:
-  name: worker-nvidia-carbide-sample
+  name: worker-nico-sample
   namespace: openshift-machine-api
   labels:
     machine.openshift.io/cluster-api-cluster: my-cluster
@@ -10,10 +10,10 @@ metadata:
 spec:
   providerSpec:
     value:
-      apiVersion: nvidiacarbideprovider.infrastructure.cluster.x-k8s.io/v1beta1
-      kind: NvidiaCarbideMachineProviderSpec
+      apiVersion: nicoprovider.infrastructure.cluster.x-k8s.io/v1beta1
+      kind: NicoMachineProviderSpec
 
-      # NVIDIA Carbide Site and Tenant (replace with your actual UUIDs)
+      # NICo Site and Tenant (replace with your actual UUIDs)
       siteId: "550e8400-e29b-41d4-a716-446655440000"
       tenantId: "660e8400-e29b-41d4-a716-446655440001"
 
@@ -43,5 +43,5 @@ spec:
 
       # Credentials Secret
       credentialsSecret:
-        name: nvidia-carbide-credentials
+        name: nico-credentials
         namespace: openshift-machine-api

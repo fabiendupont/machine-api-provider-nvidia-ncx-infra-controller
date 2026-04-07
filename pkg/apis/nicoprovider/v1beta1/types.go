@@ -20,20 +20,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// NvidiaCarbideMachineProviderSpec defines the desired state for OpenShift Machine API
-type NvidiaCarbideMachineProviderSpec struct {
+// NicoMachineProviderSpec defines the desired state for OpenShift Machine API
+type NicoMachineProviderSpec struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// SiteID is the NVIDIA Carbide Site UUID
+	// SiteID is the NICo Site UUID
 	// +required
 	SiteID string `json:"siteId"`
 
-	// TenantID is the NVIDIA Carbide tenant ID
+	// TenantID is the NICo tenant ID
 	// +required
 	TenantID string `json:"tenantId"`
 
-	// InstanceTypeID specifies the NVIDIA Carbide instance type UUID
+	// InstanceTypeID specifies the NICo instance type UUID
 	// Mutually exclusive with MachineID
 	// +optional
 	InstanceTypeID string `json:"instanceTypeId,omitempty"`
@@ -59,7 +59,7 @@ type NvidiaCarbideMachineProviderSpec struct {
 	// +optional
 	AdditionalSubnetIDs []AdditionalSubnet `json:"additionalSubnetIds,omitempty"`
 
-	// OperatingSystemID is the Carbide operating system to install.
+	// OperatingSystemID is the NICo operating system to install.
 	// If empty, a minimal iPXE script is used as fallback.
 	// +optional
 	OperatingSystemID string `json:"operatingSystemId,omitempty"`
@@ -84,11 +84,11 @@ type NvidiaCarbideMachineProviderSpec struct {
 	// +optional
 	SSHKeyGroupIDs []string `json:"sshKeyGroupIds,omitempty"`
 
-	// Labels to apply to the NVIDIA Carbide instance
+	// Labels to apply to the NICo instance
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 
-	// Description for the NVIDIA Carbide instance
+	// Description for the NICo instance
 	// +optional
 	Description string `json:"description,omitempty"`
 
@@ -102,7 +102,7 @@ type NvidiaCarbideMachineProviderSpec struct {
 	// +optional
 	DpuExtensionServices []DpuExtensionServiceSpec `json:"dpuExtensionServices,omitempty"`
 
-	// CredentialsSecret references a secret containing NVIDIA Carbide API credentials
+	// CredentialsSecret references a secret containing NICo API credentials
 	// The secret must contain: endpoint, orgName, token
 	// +required
 	CredentialsSecret CredentialsSecretReference `json:"credentialsSecret"`
@@ -130,11 +130,11 @@ type CredentialsSecretReference struct {
 	Namespace string `json:"namespace"`
 }
 
-// NvidiaCarbideMachineProviderStatus defines the observed state for OpenShift Machine API
-type NvidiaCarbideMachineProviderStatus struct {
+// NicoMachineProviderStatus defines the observed state for OpenShift Machine API
+type NicoMachineProviderStatus struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// InstanceID is the NVIDIA Carbide instance ID
+	// InstanceID is the NICo instance ID
 	// +optional
 	InstanceID *string `json:"instanceId,omitempty"`
 
@@ -155,7 +155,7 @@ type NvidiaCarbideMachineProviderStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
 	// HealthLabels contains health-related labels matching the CCM.
-	// Keys: nvidia-carbide.io/healthy, nvidia-carbide.io/health-alert-count
+	// Keys: nico.io/healthy, nico.io/health-alert-count
 	// +optional
 	HealthLabels map[string]string `json:"healthLabels,omitempty"`
 }
