@@ -15,8 +15,8 @@ github.com/evanphx/json-patch v0.5.2 h1:xVCHIVMUu1wtM/VkR9jVZ45N3FhZfYMMYGorLCR8
 github.com/evanphx/json-patch v0.5.2/go.mod h1:ZWS5hhDbVDyob71nXKNL0+PWn6ToqBHMikGIFbs31qQ=
 github.com/evanphx/json-patch/v5 v5.9.0 h1:kcBlZQbplgElYIlo/n1hJbls2z/1awpXxpRi0/FOJfg=
 github.com/evanphx/json-patch/v5 v5.9.0/go.mod h1:VNkHZ/282BpEyt/tObQO8s5CMPmYYq14uClGH4abBuQ=
-github.com/fabiendupont/nvidia-ncx-infra-controller-rest v0.0.0-20260414175945-c65af50d4ad5 h1:8CYD4buTbPWLHU19KO21y+vqffv5CH8z9jZDHwqZ5Q4=
-github.com/fabiendupont/nvidia-ncx-infra-controller-rest v0.0.0-20260414175945-c65af50d4ad5/go.mod h1:3woaHUIEKjol17lQBryzqhGMYXxFzK3pdvuRsh/dUpg=
+github.com/fabiendupont/nvidia-ncx-infra-controller-rest v0.0.0-20260415135147-bcbe5bd22e52 h1:EEbnH+xaVnp/o7JsdOQ3EVSLrRFwkwlPnRME2mzTiDQ=
+github.com/fabiendupont/nvidia-ncx-infra-controller-rest v0.0.0-20260415135147-bcbe5bd22e52/go.mod h1:6tZ9XnhshvXBxTS2HUFHdC6GpMmwDQaukmgNiH6Eygo=
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
 github.com/fxamacker/cbor/v2 v2.9.0 h1:NpKPmjDBgUfBms6tr6JZkTHtfFGcMKsw3eGcmD/sapM=
