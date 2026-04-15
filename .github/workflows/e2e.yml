@@ -20,23 +20,12 @@ jobs:
       - name: Checkout provider
         uses: actions/checkout@v4
 
-      - name: Checkout NVIDIA ncx-infra-controller-rest
+      - name: Checkout ncx-infra-controller-rest (fork with HealthAPI)
         uses: actions/checkout@v4
         with:
-          repository: NVIDIA/ncx-infra-controller-rest
+          repository: fabiendupont/nvidia-ncx-infra-controller-rest
+          ref: extensible-architecture
           path: ncx-infra-controller-rest
-
-      - name: Ensure SDK sub-module has go.mod
-        run: |
-          cd ncx-infra-controller-rest
-          if [ ! -f sdk/standard/go.mod ]; then
-            git fetch origin chore/sdk-go-module
-            git cherry-pick --no-commit FETCH_HEAD~1 FETCH_HEAD
-          fi
-
-      - name: Adjust SDK replace for CI layout
-        run: |
-          sed -i 's|=> ../../NVIDIA/ncx-infra-controller-rest/sdk/standard|=> ./ncx-infra-controller-rest/sdk/standard|' go.mod
 
       - name: Setup Go
         uses: actions/setup-go@v5
