@@ -51,6 +51,18 @@ var (
 		},
 		[]string{"method"},
 	)
+	MachinesUnhealthy = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "nico_mapi_machines_unhealthy",
+			Help: "Number of machines currently reporting critical health faults",
+		},
+	)
+	HealthEventsIngested = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "nico_mapi_health_events_ingested_total",
+			Help: "Total number of health events ingested to NICo via the fault ingestion API",
+		},
+	)
 )
 
 func init() {
@@ -59,5 +71,7 @@ func init() {
 		APICallErrors,
 		MachinesManaged,
 		APILatency,
+		MachinesUnhealthy,
+		HealthEventsIngested,
 	)
 }

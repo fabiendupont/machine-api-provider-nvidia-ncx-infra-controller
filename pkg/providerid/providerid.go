@@ -64,7 +64,10 @@ func ParseProviderID(providerIDStr string) (*ProviderID, error) {
 	case strings.HasPrefix(providerIDStr, LegacyProviderPrefix):
 		trimmed = strings.TrimPrefix(providerIDStr, LegacyProviderPrefix)
 	default:
-		return nil, fmt.Errorf("invalid provider ID prefix, expected %q or %q: %s", ProviderPrefix, LegacyProviderPrefix, providerIDStr)
+		return nil, fmt.Errorf(
+			"invalid provider ID prefix, expected %q or %q: %s",
+			ProviderPrefix, LegacyProviderPrefix, providerIDStr,
+		)
 	}
 
 	parts := strings.Split(trimmed, "/")

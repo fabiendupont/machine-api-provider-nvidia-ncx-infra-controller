@@ -2,6 +2,8 @@ module github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller
 
 go 1.25.4
 
+replace github.com/NVIDIA/ncx-infra-controller-rest => ../../NVIDIA/ncx-infra-controller-rest
+
 require (
 	github.com/NVIDIA/ncx-infra-controller-rest v1.2.0
 	github.com/google/uuid v1.6.0

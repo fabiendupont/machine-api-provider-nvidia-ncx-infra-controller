@@ -142,9 +142,11 @@ func (r *MachineReconciler) reconcileDelete(ctx context.Context, machineObj clie
 // Terminal errors (e.g. HTTP 400) are not retried. Transient errors
 // are requeued after RequeueAfterSeconds.
 func (r *MachineReconciler) handleActuatorError(
-	ctx context.Context,
-	logger interface{ Error(error, string, ...interface{}) },
-	machineObj client.Object,
+	_ context.Context,
+	logger interface {
+		Error(error, string, ...interface{})
+	},
+	_ client.Object,
 	operation string,
 	err error,
 ) (ctrl.Result, error) {

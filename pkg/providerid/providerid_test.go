@@ -23,9 +23,11 @@ import (
 	"github.com/google/uuid"
 )
 
+const testOrg = "myorg"
+
 func TestProviderID_String(t *testing.T) {
 	id := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
-	pid := NewProviderID("myorg", "mytenant", "mysite", id)
+	pid := NewProviderID(testOrg, "mytenant", "mysite", id)
 
 	got := pid.String()
 	want := "nico://myorg/mytenant/mysite/550e8400-e29b-41d4-a716-446655440000"
@@ -45,8 +47,8 @@ func TestParseProviderID_NicoScheme(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProviderID() error = %v", err)
 	}
-	if parsed.OrgName != "myorg" {
-		t.Errorf("OrgName = %q, want %q", parsed.OrgName, "myorg")
+	if parsed.OrgName != testOrg {
+		t.Errorf("OrgName = %q, want %q", parsed.OrgName, testOrg)
 	}
 	if parsed.TenantName != "mytenant" {
 		t.Errorf("TenantName = %q, want %q", parsed.TenantName, "mytenant")
@@ -66,8 +68,8 @@ func TestParseProviderID_LegacyScheme(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProviderID() error = %v", err)
 	}
-	if parsed.OrgName != "myorg" {
-		t.Errorf("OrgName = %q, want %q", parsed.OrgName, "myorg")
+	if parsed.OrgName != testOrg {
+		t.Errorf("OrgName = %q, want %q", parsed.OrgName, testOrg)
 	}
 	if parsed.TenantName != "mytenant" {
 		t.Errorf("TenantName = %q, want %q", parsed.TenantName, "mytenant")
@@ -81,8 +83,8 @@ func TestParseProviderID_LegacyThreeSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProviderID() error = %v", err)
 	}
-	if parsed.OrgName != "myorg" {
-		t.Errorf("OrgName = %q, want %q", parsed.OrgName, "myorg")
+	if parsed.OrgName != testOrg {
+		t.Errorf("OrgName = %q, want %q", parsed.OrgName, testOrg)
 	}
 	if parsed.TenantName != "" {
 		t.Errorf("TenantName = %q, want empty for legacy 3-segment", parsed.TenantName)
