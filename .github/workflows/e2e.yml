@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: fabiendupont/nvidia-ncx-infra-controller-rest
-          ref: extensible-architecture
+          ref: feat/extensible-architecture
           path: ncx-infra-controller-rest
 
       - name: Setup Go
