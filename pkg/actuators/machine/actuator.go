@@ -201,6 +201,8 @@ const (
 
 	labelHealthy    = "nico.io/healthy"
 	labelAlertCount = "nico.io/health-alert-count"
+	labelTrue       = "true"
+	labelFalse      = "false"
 )
 
 // APIErrorKind classifies NICo API errors for retry decisions.
@@ -1640,7 +1642,7 @@ func (a *Actuator) updateMachineHealthFromReports(
 		setCondition(providerStatus, condMachineHealthy, metav1.ConditionTrue,
 			"Healthy", "No health alerts")
 		providerStatus.HealthLabels = map[string]string{
-			labelHealthy: "true",
+			labelHealthy: labelTrue,
 		}
 		setCondition(providerStatus, condNicoFaultRemediation, metav1.ConditionFalse,
 			"NoRemediation", "No active fault remediation")
@@ -1660,7 +1662,7 @@ func (a *Actuator) updateMachineHealthFromReports(
 			setCondition(providerStatus, condMachineHealthy, metav1.ConditionFalse,
 				reason, msg)
 			providerStatus.HealthLabels = map[string]string{
-				labelHealthy:    "false",
+				labelHealthy:    labelFalse,
 				labelAlertCount: fmt.Sprintf("%d", len(allAlerts)),
 			}
 		} else if len(warning) > 0 {
@@ -1668,7 +1670,7 @@ func (a *Actuator) updateMachineHealthFromReports(
 			setCondition(providerStatus, condMachineHealthy, metav1.ConditionTrue,
 				"HealthyWithWarnings", warnMsg)
 			providerStatus.HealthLabels = map[string]string{
-				labelHealthy:    "true",
+				labelHealthy:    labelTrue,
 				labelAlertCount: fmt.Sprintf("%d", len(warning)),
 			}
 		}
@@ -1721,7 +1723,7 @@ func (a *Actuator) updateMachineHealthFromJSONB(
 		setCondition(providerStatus, condMachineHealthy, metav1.ConditionTrue,
 			"Healthy", "Machine has no health alerts")
 		providerStatus.HealthLabels = map[string]string{
-			labelHealthy: "true",
+			labelHealthy: labelTrue,
 		}
 		setCondition(providerStatus, condNicoFaultRemediation, metav1.ConditionFalse,
 			"NoRemediation", "No active fault remediation")
@@ -1742,7 +1744,7 @@ func (a *Actuator) updateMachineHealthFromJSONB(
 		setCondition(providerStatus, condMachineHealthy, metav1.ConditionFalse,
 			reason, msg)
 		providerStatus.HealthLabels = map[string]string{
-			labelHealthy:    "false",
+			labelHealthy:    labelFalse,
 			labelAlertCount: fmt.Sprintf("%d", len(machine.Health.Alerts)),
 		}
 	} else if len(warning) > 0 {
@@ -1750,7 +1752,7 @@ func (a *Actuator) updateMachineHealthFromJSONB(
 		setCondition(providerStatus, condMachineHealthy, metav1.ConditionTrue,
 			"HealthyWithWarnings", warnMsg)
 		providerStatus.HealthLabels = map[string]string{
-			labelHealthy:    "true",
+			labelHealthy:    labelTrue,
 			labelAlertCount: fmt.Sprintf("%d", len(warning)),
 		}
 	}

@@ -52,7 +52,16 @@ const (
 	testAlertID         = "alert-1"
 	testSiteID          = "550e8400-e29b-41d4-a716-446655440000"
 	testHealthSource    = "hardware-monitor"
+	testReportMode      = "replace"
+	testValidationName  = "hw-validation"
+	testValidationCtx   = "pre-provision"
+	testValidationDone  = "completed"
+	testBuildSiteID     = "site-1"
+	testBuildTenantID   = "tenant-1"
+	testBuildVpcID      = "vpc-1"
+	testBuildSubnetID   = "subnet-1"
 	mhcAnnotation       = "machine.openshift.io/unhealthy"
+	secretKeyOrgName    = "orgName"
 )
 
 // mockNicoClient implements NicoClientInterface for testing
@@ -1518,7 +1527,7 @@ func TestUpdate_HealthFromHealthReportAPI(t *testing.T) {
 			return []nico.MachineHealthReportEntry{
 				{
 					Source: testHealthSource,
-					Mode:   "replace",
+					Mode:   testReportMode,
 					Alerts: []nico.MachineHealthProbeAlert{
 						{Id: testAlertID, Message: "GPU ECC uncorrectable error", Classifications: []string{severityCritical}},
 					},
@@ -1551,7 +1560,7 @@ func TestUpdate_HealthFromHealthReportAPI_Remediating(t *testing.T) {
 			return []nico.MachineHealthReportEntry{
 				{
 					Source: testHealthSource,
-					Mode:   "replace",
+					Mode:   testReportMode,
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
 							Id: testAlertID, Message: "GPU reset in progress",
@@ -1665,7 +1674,7 @@ func TestCreate_PreFlightHealthCheck_UsesHealthReportAPI(t *testing.T) {
 			return []nico.MachineHealthReportEntry{
 				{
 					Source: testHealthSource,
-					Mode:   "replace",
+					Mode:   testReportMode,
 					Alerts: []nico.MachineHealthProbeAlert{
 						{Id: testAlertID, Message: "Persistent GPU fault", Classifications: []string{severityCritical}},
 					},
@@ -1841,9 +1850,9 @@ func TestCreate_PreFlightValidation_BlocksOnFailure(t *testing.T) {
 					MachineID:    machineId,
 					StartTime:    now.Add(-10 * time.Minute),
 					EndTime:      endTime,
-					Name:         "hw-validation",
-					Context:      "pre-provision",
-					Status:       nico.MachineValidationStatus{State: "completed", Total: 5, Completed: 3},
+					Name:         testValidationName,
+					Context:      testValidationCtx,
+					Status:       nico.MachineValidationStatus{State: testValidationDone, Total: 5, Completed: 3},
 				},
 			}, &http.Response{StatusCode: 200}, nil
 		},
@@ -1924,9 +1933,9 @@ func TestCreate_PreFlightValidation_AllowsOnPass(t *testing.T) {
 					MachineID:    machineId,
 					StartTime:    now.Add(-10 * time.Minute),
 					EndTime:      endTime,
-					Name:         "hw-validation",
-					Context:      "pre-provision",
-					Status:       nico.MachineValidationStatus{State: "completed", Total: 5, Completed: 5},
+					Name:         testValidationName,
+					Context:      testValidationCtx,
+					Status:       nico.MachineValidationStatus{State: testValidationDone, Total: 5, Completed: 5},
 				},
 			}, &http.Response{StatusCode: 200}, nil
 		},
@@ -2010,10 +2019,10 @@ func TestUpdate_MachineStatusHistory_EmittedWhenStuck(t *testing.T) {
 func TestBuildInstanceRequest_AllOptionalFields(t *testing.T) {
 	devInstance := int32(2)
 	spec := &v1beta1.NicoMachineProviderSpec{
-		SiteID:                   "site-1",
-		TenantID:                 "tenant-1",
-		VpcID:                    "vpc-1",
-		SubnetID:                 "subnet-1",
+		SiteID:                   testBuildSiteID,
+		TenantID:                 testBuildTenantID,
+		VpcID:                    testBuildVpcID,
+		SubnetID:                 testBuildSubnetID,
 		InstanceTypeID:           "itype-1",
 		UserData:                 "#!/bin/bash\necho hello",
 		OperatingSystemID:        "os-1",
@@ -2093,10 +2102,10 @@ func TestBuildInstanceRequest_AllOptionalFields(t *testing.T) {
 
 func TestBuildInstanceRequest_FallbackIpxeScript(t *testing.T) {
 	spec := &v1beta1.NicoMachineProviderSpec{
-		SiteID:         "site-1",
-		TenantID:       "tenant-1",
-		VpcID:          "vpc-1",
-		SubnetID:       "subnet-1",
+		SiteID:         testBuildSiteID,
+		TenantID:       testBuildTenantID,
+		VpcID:          testBuildVpcID,
+		SubnetID:       testBuildSubnetID,
 		InstanceTypeID: "itype-1",
 	}
 
@@ -2112,10 +2121,10 @@ func TestBuildInstanceRequest_FallbackIpxeScript(t *testing.T) {
 
 func TestBuildInstanceRequest_MachineID(t *testing.T) {
 	spec := &v1beta1.NicoMachineProviderSpec{
-		SiteID:                "site-1",
-		TenantID:              "tenant-1",
-		VpcID:                 "vpc-1",
-		SubnetID:              "subnet-1",
+		SiteID:                testBuildSiteID,
+		TenantID:              testBuildTenantID,
+		VpcID:                 testBuildVpcID,
+		SubnetID:              testBuildSubnetID,
 		MachineID:             "machine-1",
 		AllowUnhealthyMachine: true,
 	}
@@ -2283,8 +2292,8 @@ func TestCreate_PreFlightValidation_BlocksOnInProgressRun(t *testing.T) {
 					ValidationID: "v1",
 					MachineID:    machineId,
 					StartTime:    time.Now().Add(-2 * time.Minute),
-					Name:         "hw-validation",
-					Context:      "pre-provision",
+					Name:         testValidationName,
+					Context:      testValidationCtx,
 					Status:       nico.MachineValidationStatus{State: "running", Total: 5, Completed: 2},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -2335,8 +2344,8 @@ func TestCreate_PreFlightValidation_PicksLatestRun(t *testing.T) {
 					StartTime:    oldTime.Add(-10 * time.Minute),
 					EndTime:      oldEnd,
 					Name:         "old-run",
-					Context:      "pre-provision",
-					Status:       nico.MachineValidationStatus{State: "completed", Total: 5, Completed: 3},
+					Context:      testValidationCtx,
+					Status:       nico.MachineValidationStatus{State: testValidationDone, Total: 5, Completed: 3},
 				},
 				{
 					ValidationID: "v-new",
@@ -2344,8 +2353,8 @@ func TestCreate_PreFlightValidation_PicksLatestRun(t *testing.T) {
 					StartTime:    now.Add(-10 * time.Minute),
 					EndTime:      newEnd,
 					Name:         "new-run",
-					Context:      "pre-provision",
-					Status:       nico.MachineValidationStatus{State: "completed", Total: 5, Completed: 5},
+					Context:      testValidationCtx,
+					Status:       nico.MachineValidationStatus{State: testValidationDone, Total: 5, Completed: 5},
 				},
 			}, &http.Response{StatusCode: 200}, nil
 		},
