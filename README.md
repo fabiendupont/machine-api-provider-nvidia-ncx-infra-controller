@@ -39,7 +39,7 @@ The provider translates OpenShift Machine API requests into NICo REST API calls 
                  v
 +-----------------------------------------------------+
 |         NICo REST API Client                        |
-|   (github.com/NVIDIA/ncx-infra-controller-rest)    |
+|   (github.com/NVIDIA/infra-controller)             |
 +-----------------------------------------------------+
                  |
                  v
@@ -51,28 +51,24 @@ The provider translates OpenShift Machine API requests into NICo REST API calls 
 
 ## Dependencies
 
-- **[github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard](https://github.com/NVIDIA/ncx-infra-controller-rest)** - Auto-generated REST API client (SDK)
+- **[github.com/NVIDIA/infra-controller/rest-api/sdk/standard](https://github.com/NVIDIA/infra-controller)** - Auto-generated REST API client (SDK)
 - **[github.com/openshift/api](https://github.com/openshift/api)** - OpenShift Machine API types
 - **OpenShift 4.14+** or compatible Machine API implementation
 
 ### SDK Dependency Note
 
-The NCX Infra Controller REST SDK (`github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard`) does not
-yet have tagged releases for its `sdk/standard` sub-module. Until upstream tags the module,
-`go.mod` uses a local `replace` directive pointing to a sibling checkout:
+The Infra Controller REST SDK (`github.com/NVIDIA/infra-controller/rest-api/sdk/standard`)
+does not yet have tagged releases for its `sdk/standard` sub-module. Until upstream
+tags the module, `go.mod` uses a local `replace` directive pointing to a sibling checkout:
 
 ```
-replace github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard => ../../NVIDIA/ncx-infra-controller-rest/sdk/standard
+replace github.com/NVIDIA/infra-controller/rest-api/sdk/standard => ../../NVIDIA/infra-controller/rest-api/sdk/standard
 ```
 
-**Why this is necessary:** Go modules require each sub-module (`sdk/standard/` lives
-under the parent `ncx-infra-controller-rest` repository) to have its own `go.mod` with
-a tagged version. The upstream repository has the `go.mod` on the `chore/sdk-go-module`
-branch, which must be cherry-picked into your local checkout until it is merged to main.
-
-**Tracking:** Monitor the upstream repository for a tagged release of the
-`sdk/standard` sub-module (e.g., `sdk/standard/v0.1.0`). When available, remove the
-`replace` directive and update the `require` entry to the actual version.
+This requires a local clone of `github.com/NVIDIA/infra-controller` at the expected
+relative path. Monitor the upstream repository for a tagged release of the
+`rest-api/sdk/standard` sub-module. When available, remove the `replace` directive
+and update the `require` entry to the actual version.
 
 ## Prerequisites
 
@@ -343,7 +339,7 @@ Apache 2.0
 ## Related Projects
 
 - [cloud-provider-nvidia-ncx-infra-controller](../cloud-provider-nvidia-ncx-infra-controller) - Cloud Controller Manager for NICo
-- [ncx-infra-controller-rest](https://github.com/NVIDIA/ncx-infra-controller-rest) - NICo REST API and SDK
+- [infra-controller](https://github.com/NVIDIA/infra-controller) - NICo Infrastructure Controller (REST API and SDK)
 
 ## Contributing
 

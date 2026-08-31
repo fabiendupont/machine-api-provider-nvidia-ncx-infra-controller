@@ -41,7 +41,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
+	nico "github.com/NVIDIA/infra-controller/rest-api/sdk/standard"
 	"github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/actuators/machine"
 	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/apis/nicoprovider/v1beta1"
 )
@@ -188,15 +188,16 @@ func (m *mockNicoClient) GetInstanceStatusHistory(
 	return nil, mockHTTPResponse(200), nil
 }
 
-func (m *mockNicoClient) ListFaultEvents(
-	ctx context.Context, org string, machineId string, state string,
-) ([]nico.FaultEvent, *http.Response, error) {
+func (m *mockNicoClient) GetAllMachineHealthReport(
+	ctx context.Context, org string, machineId string,
+) ([]nico.MachineHealthReportEntry, *http.Response, error) {
 	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
 }
 
-func (m *mockNicoClient) IngestFaultEvent(
-	ctx context.Context, org string, req nico.FaultIngestionRequest,
-) (*nico.FaultEvent, *http.Response, error) {
+func (m *mockNicoClient) CreateOrUpdateMachineHealthReport(
+	ctx context.Context, org string, machineId string,
+	req nico.MachineHealthReportEntryRequest,
+) (*nico.MachineHealthReportEntry, *http.Response, error) {
 	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
 }
 

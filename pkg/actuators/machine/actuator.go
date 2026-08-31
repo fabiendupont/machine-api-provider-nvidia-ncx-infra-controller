@@ -36,7 +36,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
+	nico "github.com/NVIDIA/infra-controller/rest-api/sdk/standard"
 	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/apis/nicoprovider/v1beta1"
 	nicometrics "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/metrics"
 	"github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/providerid"
@@ -67,12 +67,13 @@ type NicoClientInterface interface {
 	GetInstanceStatusHistory(
 		ctx context.Context, org string, instanceId string,
 	) ([]nico.StatusDetail, *http.Response, error)
-	ListFaultEvents(
-		ctx context.Context, org string, machineId string, state string,
-	) ([]nico.FaultEvent, *http.Response, error)
-	IngestFaultEvent(
-		ctx context.Context, org string, req nico.FaultIngestionRequest,
-	) (*nico.FaultEvent, *http.Response, error)
+	GetAllMachineHealthReport(
+		ctx context.Context, org string, machineId string,
+	) ([]nico.MachineHealthReportEntry, *http.Response, error)
+	CreateOrUpdateMachineHealthReport(
+		ctx context.Context, org string, machineId string,
+		req nico.MachineHealthReportEntryRequest,
+	) (*nico.MachineHealthReportEntry, *http.Response, error)
 }
 
 // nicoClient wraps the SDK APIClient and injects auth context
@@ -105,7 +106,8 @@ func (c *nicoClient) DeleteInstance(
 	if deleteReq != nil {
 		r = r.InstanceDeleteRequest(*deleteReq)
 	}
-	return r.Execute()
+	_, httpResp, err := r.Execute()
+	return httpResp, err
 }
 
 func (c *nicoClient) UpdateInstance(
@@ -135,23 +137,19 @@ func (c *nicoClient) GetInstanceStatusHistory(
 	return c.client.InstanceAPI.GetInstanceStatusHistory(c.authCtx(ctx), org, instanceId).Execute()
 }
 
-func (c *nicoClient) ListFaultEvents(
-	ctx context.Context, org, machineId, state string,
-) ([]nico.FaultEvent, *http.Response, error) {
-	r := c.client.HealthAPI.ListFaultEvents(c.authCtx(ctx), org)
-	if machineId != "" {
-		r = r.MachineId(machineId)
-	}
-	if state != "" {
-		r = r.State(state)
-	}
-	return r.Execute()
+func (c *nicoClient) GetAllMachineHealthReport(
+	ctx context.Context, org, machineId string,
+) ([]nico.MachineHealthReportEntry, *http.Response, error) {
+	return c.client.HealthReportAPI.GetAllMachineHealthReport(c.authCtx(ctx), org, machineId).Execute()
 }
 
-func (c *nicoClient) IngestFaultEvent(
-	ctx context.Context, org string, req nico.FaultIngestionRequest,
-) (*nico.FaultEvent, *http.Response, error) {
-	return c.client.HealthAPI.IngestFaultEvent(c.authCtx(ctx), org).FaultIngestionRequest(req).Execute()
+func (c *nicoClient) CreateOrUpdateMachineHealthReport(
+	ctx context.Context, org, machineId string,
+	req nico.MachineHealthReportEntryRequest,
+) (*nico.MachineHealthReportEntry, *http.Response, error) {
+	return c.client.HealthReportAPI.CreateOrUpdateMachineHealthReport(
+		c.authCtx(ctx), org, machineId,
+	).MachineHealthReportEntryRequest(req).Execute()
 }
 
 const (
@@ -196,10 +194,6 @@ func classifyHTTPError(httpResp *http.Response, err error) error {
 	}
 }
 
-// faultManagementCacheTTL is how long the fault-management capability
-// result is cached before re-querying the tenant API.
-var faultManagementCacheTTL = 5 * time.Minute
-
 // Actuator implements the OpenShift Machine actuator interface
 type Actuator struct {
 	client        client.Client
@@ -207,11 +201,6 @@ type Actuator struct {
 	// For testing
 	nicoAPIClient NicoClientInterface
 	orgName       string
-
-	// Cached fault-management capability check
-	faultMgmtCached  bool
-	faultMgmtEnabled bool
-	faultMgmtExpiry  time.Time
 }
 
 // NewActuator creates a new machine actuator
@@ -290,10 +279,10 @@ func buildInstanceRequest(
 	}
 
 	if providerSpec.InstanceTypeID != "" {
-		req.InstanceTypeId = &providerSpec.InstanceTypeID
+		req.InstanceTypeId = *nico.NewNullableString(&providerSpec.InstanceTypeID)
 	}
 	if providerSpec.MachineID != "" {
-		req.MachineId = &providerSpec.MachineID
+		req.MachineId = *nico.NewNullableString(&providerSpec.MachineID)
 	}
 	if providerSpec.AllowUnhealthyMachine {
 		req.AllowUnhealthyMachine = ptr(true)
@@ -346,11 +335,11 @@ func buildInstanceRequest(
 		req.InfinibandInterfaces = ibInterfaces
 	}
 	if len(providerSpec.NVLinkInterfaces) > 0 {
-		nvlInterfaces := make([]nico.NVLinkInterfaceCreateRequest, 0, len(providerSpec.NVLinkInterfaces))
+		nvlInterfaces := make([]nico.NVLinkInterfaceCreateOrUpdateRequest, 0, len(providerSpec.NVLinkInterfaces))
 		for _, nvl := range providerSpec.NVLinkInterfaces {
-			nvlReq := nico.NVLinkInterfaceCreateRequest{}
+			nvlReq := nico.NVLinkInterfaceCreateOrUpdateRequest{}
 			if nvl.NVLinkLogicalPartitionID != "" {
-				nvlReq.NvLinklogicalPartitionId = &nvl.NVLinkLogicalPartitionID
+				nvlReq.NvLinkLogicalPartitionId = &nvl.NVLinkLogicalPartitionID
 			}
 			if nvl.DeviceInstance != nil {
 				nvlReq.DeviceInstance = nvl.DeviceInstance
@@ -658,10 +647,10 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 	if isMHCRemediation(machineObj) {
 		now := time.Now().UTC()
 
-		// Ingest a fault event via the structured HealthAPI (if fault-management
-		// is enabled) so NICo's remediation workflow can attempt repair.
-		if a.hasFaultManagement(ctx, nicoAPIClient, orgName) {
-			a.ingestMHCFaultEvent(ctx, nicoAPIClient, orgName, machineObj, providerStatus, now)
+		// Report a health issue via the HealthReport API so NICo's
+		// remediation workflow can attempt repair.
+		if providerStatus.MachineID != nil {
+			a.reportMHCHealthIssue(ctx, nicoAPIClient, orgName, machineObj, providerStatus, now)
 		}
 
 		// Also set MachineHealthIssue on the delete request as fallback
@@ -669,10 +658,11 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 			`{"machine_name":%q,"namespace":%q,"annotation":"machine.openshift.io/unhealthy","detected_at":%q}`,
 			machineObj.GetName(), machineObj.GetNamespace(), now.Format(time.RFC3339),
 		)
+		summary := fmt.Sprintf("MachineHealthCheck triggered remediation for machine %s", machineObj.GetName())
 		deleteReq = &nico.InstanceDeleteRequest{
 			MachineHealthIssue: &nico.MachineHealthIssue{
-				Category: ptr("MachineHealthCheck"),
-				Summary:  ptr(fmt.Sprintf("MachineHealthCheck triggered remediation for machine %s", machineObj.GetName())),
+				Category: "MachineHealthCheck",
+				Summary:  *nico.NewNullableString(&summary),
 				Details:  *nico.NewNullableString(&details),
 			},
 		}
@@ -1140,8 +1130,8 @@ func (a *Actuator) checkStatusHistory(
 			status = *entry.Status
 		}
 		msg := ""
-		if entry.Message != nil {
-			msg = *entry.Message
+		if entry.Message.Get() != nil {
+			msg = *entry.Message.Get()
 		}
 		ts := ""
 		if entry.Created != nil {
@@ -1273,10 +1263,10 @@ func (a *Actuator) checkPreFlightHealth(
 		providerSpec.MachineID, attempt, MaxFaultBlockedAttempts)
 }
 
-// ingestMHCFaultEvent posts a fault event to NICo's health ingestion endpoint
+// reportMHCHealthIssue posts a health report to NICo's HealthReport API
 // when MachineHealthCheck triggers remediation. Non-fatal — failure is logged
 // but does not block deletion.
-func (a *Actuator) ingestMHCFaultEvent(
+func (a *Actuator) reportMHCHealthIssue(
 	ctx context.Context,
 	nicoAPIClient NicoClientInterface,
 	orgName string,
@@ -1284,65 +1274,54 @@ func (a *Actuator) ingestMHCFaultEvent(
 	providerStatus *v1beta1.NicoMachineProviderStatus,
 	now time.Time,
 ) {
-	ingestReq := nico.FaultIngestionRequest{
-		Source:    "k8s-mhc",
-		Severity:  severityCritical,
-		Component: "node",
-		Message:   fmt.Sprintf("MachineHealthCheck triggered remediation for machine %s", machineObj.GetName()),
-		Metadata: map[string]interface{}{
-			"machine_name":   machineObj.GetName(),
-			"namespace":      machineObj.GetNamespace(),
-			"mhc_annotation": "machine.openshift.io/unhealthy",
-		},
+	alert := nico.MachineHealthProbeAlert{
+		Id:              "mhc-remediation-triggered",
+		Message:         fmt.Sprintf("MachineHealthCheck triggered remediation for machine %s", machineObj.GetName()),
+		Classifications: []string{severityCritical},
 	}
-	classification := "mhc-remediation-triggered"
-	ingestReq.Classification = &classification
-	ingestReq.DetectedAt = &now
-	if providerStatus.MachineID != nil {
-		ingestReq.MachineId = providerStatus.MachineID
+	reportReq := nico.MachineHealthReportEntryRequest{
+		Source: "k8s-mhc",
+		Alerts: []nico.MachineHealthProbeAlert{alert},
+		Mode:   "replace",
 	}
 
-	_, ingestResp, ingestErr := nicoAPIClient.IngestFaultEvent(ctx, orgName, ingestReq)
-	if ingestErr == nil && ingestResp != nil && ingestResp.StatusCode < 300 {
+	_, resp, err := nicoAPIClient.CreateOrUpdateMachineHealthReport(
+		ctx, orgName, *providerStatus.MachineID, reportReq,
+	)
+	if err == nil && resp != nil && resp.StatusCode < 300 {
 		nicometrics.HealthEventsIngested.Inc()
 		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "MHCFaultIngested",
-				"Ingested MHC fault event to NICo health events API")
+			a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "MHCHealthReported",
+				"Reported MHC health issue to NICo HealthReport API")
 		}
 	}
 }
 
-// checkCriticalFaults checks for open critical faults on a machine. Uses the
-// structured HealthAPI if fault-management is enabled, otherwise falls back
-// to JSONB. Returns (true, message) if critical faults are present.
+// checkCriticalFaults checks for open critical faults on a machine. Tries the
+// HealthReport API first, falls back to GetMachine().Health JSONB.
+// Returns (true, message) if critical faults are present.
 func (a *Actuator) checkCriticalFaults(
 	ctx context.Context,
 	nicoAPIClient NicoClientInterface,
 	orgName string,
 	machineID string,
 ) (bool, string) {
-	// Try structured fault events API if capability is enabled
-	if a.hasFaultManagement(ctx, nicoAPIClient, orgName) {
-		events, httpResp, err := nicoAPIClient.ListFaultEvents(ctx, orgName, machineID, "open")
-		if err == nil && httpResp != nil && httpResp.StatusCode < 300 {
-			var criticalCount int
-			var firstMsg string
-			for _, ev := range events {
-				if ev.GetSeverity() == severityCritical || ev.GetSeverity() == "" {
-					criticalCount++
-					if firstMsg == "" && ev.GetMessage() != "" {
-						firstMsg = ev.GetMessage()
-					}
-				}
-			}
-			if criticalCount == 0 {
-				return false, ""
-			}
-			if firstMsg == "" {
-				firstMsg = fmt.Sprintf("Machine %s has %d open critical fault event(s)", machineID, criticalCount)
-			}
-			return true, firstMsg
+	// Try HealthReport API first
+	reports, httpResp, err := nicoAPIClient.GetAllMachineHealthReport(ctx, orgName, machineID)
+	if err == nil && httpResp != nil && httpResp.StatusCode < 300 {
+		var allAlerts []nico.MachineHealthProbeAlert
+		for _, report := range reports {
+			allAlerts = append(allAlerts, report.GetAlerts()...)
 		}
+		critical, _ := classifyAlerts(allAlerts)
+		if len(critical) == 0 {
+			return false, ""
+		}
+		alertMsg := fmt.Sprintf("Machine %s has %d critical health alert(s)", machineID, len(critical))
+		if critical[0].Message != "" {
+			alertMsg = critical[0].Message
+		}
+		return true, alertMsg
 	}
 
 	// Fall back to JSONB health parsing
@@ -1358,8 +1337,8 @@ func (a *Actuator) checkCriticalFaults(
 		return false, ""
 	}
 	alertMsg := fmt.Sprintf("Machine %s has %d critical health alert(s)", machineID, len(critical))
-	if critical[0].Message != nil && *critical[0].Message != "" {
-		alertMsg = *critical[0].Message
+	if critical[0].Message != "" {
+		alertMsg = critical[0].Message
 	}
 	return true, alertMsg
 }
@@ -1416,36 +1395,10 @@ func hasRemediatingAlert(alerts []nico.MachineHealthProbeAlert) bool {
 	return false
 }
 
-// hasFaultManagement checks if the tenant has the fault-management capability
-// enabled. The result is cached for faultManagementCacheTTL to avoid hitting
-// the tenant API on every reconcile.
-func (a *Actuator) hasFaultManagement(
-	ctx context.Context,
-	nicoAPIClient NicoClientInterface,
-	orgName string,
-) bool {
-	if a.faultMgmtCached && time.Now().Before(a.faultMgmtExpiry) {
-		return a.faultMgmtEnabled
-	}
-
-	tenant, _, err := nicoAPIClient.GetCurrentTenant(ctx, orgName)
-	if err != nil || tenant == nil || tenant.Capabilities == nil {
-		a.faultMgmtCached = true
-		a.faultMgmtEnabled = false
-		a.faultMgmtExpiry = time.Now().Add(faultManagementCacheTTL)
-		return false
-	}
-
-	a.faultMgmtCached = true
-	a.faultMgmtEnabled = tenant.Capabilities.GetFaultManagement()
-	a.faultMgmtExpiry = time.Now().Add(faultManagementCacheTTL)
-	return a.faultMgmtEnabled
-}
-
-// updateMachineHealth queries fault events via the structured HealthAPI and
+// updateMachineHealth queries health reports via the HealthReport API and
 // maps them to MachineHealthy and NicoFaultRemediation conditions. Falls back
-// to the legacy GetMachine().Health JSONB approach if the fault-management
-// capability is not enabled. Health failures are non-fatal.
+// to the legacy GetMachine().Health JSONB approach if the HealthReport API is
+// unavailable. Health failures are non-fatal.
 func (a *Actuator) updateMachineHealth(
 	ctx context.Context,
 	nicoAPIClient NicoClientInterface,
@@ -1461,12 +1414,10 @@ func (a *Actuator) updateMachineHealth(
 	// Snapshot previous health state for gauge tracking
 	wasUnhealthy := isConditionFalse(providerStatus, "MachineHealthy")
 
-	// Use structured fault events API if fault-management capability is enabled
-	if a.hasFaultManagement(ctx, nicoAPIClient, orgName) {
-		if a.updateMachineHealthFromFaultEvents(ctx, nicoAPIClient, orgName, *machineID, providerStatus) {
-			trackUnhealthyGauge(wasUnhealthy, providerStatus)
-			return
-		}
+	// Try HealthReport API first, fall back to JSONB
+	if a.updateMachineHealthFromReports(ctx, nicoAPIClient, orgName, *machineID, providerStatus) {
+		trackUnhealthyGauge(wasUnhealthy, providerStatus)
+		return
 	}
 
 	// Fall back to legacy JSONB health parsing
@@ -1501,24 +1452,30 @@ func trackUnhealthyGauge(
 	}
 }
 
-// updateMachineHealthFromFaultEvents queries ListFaultEvents for open faults
-// on the machine. Returns true if the API was available (even if no faults),
-// false if the API is unavailable and the caller should fall back.
-func (a *Actuator) updateMachineHealthFromFaultEvents(
+// updateMachineHealthFromReports queries GetAllMachineHealthReport for health
+// reports on the machine. Returns true if the API was available (even if no
+// alerts), false if the API is unavailable and the caller should fall back.
+func (a *Actuator) updateMachineHealthFromReports(
 	ctx context.Context,
 	nicoAPIClient NicoClientInterface,
 	orgName string,
 	machineID string,
 	providerStatus *v1beta1.NicoMachineProviderStatus,
 ) bool {
-	events, httpResp, err := nicoAPIClient.ListFaultEvents(ctx, orgName, machineID, "open")
+	reports, httpResp, err := nicoAPIClient.GetAllMachineHealthReport(ctx, orgName, machineID)
 	if err != nil || httpResp == nil || httpResp.StatusCode >= 300 {
 		return false
 	}
 
-	if len(events) == 0 {
+	// Collect all alerts across all report entries
+	var allAlerts []nico.MachineHealthProbeAlert
+	for _, report := range reports {
+		allAlerts = append(allAlerts, report.GetAlerts()...)
+	}
+
+	if len(allAlerts) == 0 {
 		setCondition(providerStatus, "MachineHealthy", metav1.ConditionTrue,
-			"Healthy", "No open fault events")
+			"Healthy", "No health alerts")
 		providerStatus.HealthLabels = map[string]string{
 			"nico.io/healthy": "true",
 		}
@@ -1527,51 +1484,34 @@ func (a *Actuator) updateMachineHealthFromFaultEvents(
 		return true
 	}
 
-	// Classify fault events by severity
-	var criticalEvents, warningEvents []nico.FaultEvent
-	hasRemediation := false
-	for _, ev := range events {
-		sev := ev.GetSeverity()
-		switch sev {
-		case severityCritical:
-			criticalEvents = append(criticalEvents, ev)
-		case severityWarning:
-			warningEvents = append(warningEvents, ev)
-		default:
-			// Unknown severity treated as critical (fail-safe)
-			criticalEvents = append(criticalEvents, ev)
-		}
-		if ev.GetState() == severityRemediating {
-			hasRemediation = true
-		}
-	}
+	critical, warning := classifyAlerts(allAlerts)
 
-	if len(criticalEvents) > 0 {
+	if len(critical) > 0 {
 		reason := "CriticalFault"
-		msg := fmt.Sprintf("Machine has %d open critical fault event(s)", len(criticalEvents))
-		if c := criticalEvents[0].GetClassification(); c != "" {
-			reason = c
+		msg := fmt.Sprintf("Machine has %d critical health alert(s)", len(critical))
+		if len(critical[0].Classifications) > 0 {
+			reason = critical[0].Classifications[0]
 		}
-		if m := criticalEvents[0].GetMessage(); m != "" {
-			msg = m
+		if critical[0].Message != "" {
+			msg = critical[0].Message
 		}
 		setCondition(providerStatus, "MachineHealthy", metav1.ConditionFalse,
 			reason, msg)
 		providerStatus.HealthLabels = map[string]string{
 			"nico.io/healthy":            "false",
-			"nico.io/health-alert-count": fmt.Sprintf("%d", len(events)),
+			"nico.io/health-alert-count": fmt.Sprintf("%d", len(allAlerts)),
 		}
-	} else if len(warningEvents) > 0 {
-		warnMsg := fmt.Sprintf("Machine has %d open warning fault event(s)", len(warningEvents))
+	} else if len(warning) > 0 {
+		warnMsg := fmt.Sprintf("Machine has %d warning alert(s)", len(warning))
 		setCondition(providerStatus, "MachineHealthy", metav1.ConditionTrue,
 			"HealthyWithWarnings", warnMsg)
 		providerStatus.HealthLabels = map[string]string{
 			"nico.io/healthy":            "true",
-			"nico.io/health-alert-count": fmt.Sprintf("%d", len(warningEvents)),
+			"nico.io/health-alert-count": fmt.Sprintf("%d", len(warning)),
 		}
 	}
 
-	if hasRemediation {
+	if hasRemediatingAlert(allAlerts) {
 		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionTrue,
 			"RemediationInProgress", "Automated fault remediation in progress")
 	} else {
@@ -1617,8 +1557,8 @@ func (a *Actuator) updateMachineHealthFromJSONB(
 	if len(critical) > 0 {
 		reason := "CriticalFault"
 		msg := fmt.Sprintf("Machine has %d critical health alert(s)", len(critical))
-		if critical[0].Message != nil && *critical[0].Message != "" {
-			msg = *critical[0].Message
+		if critical[0].Message != "" {
+			msg = critical[0].Message
 		}
 		if len(critical[0].Classifications) > 0 {
 			reason = critical[0].Classifications[0]

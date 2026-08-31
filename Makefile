@@ -12,6 +12,9 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
+SETUP_ENVTEST ?= $(GOBIN)/setup-envtest
+ENVTEST_K8S_VERSION ?= 1.35.0
+
 .PHONY: all
 all: build
 
@@ -32,8 +35,16 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: ## Run tests.
-	go test ./... -coverprofile cover.out
+test: ## Run unit tests.
+	go test ./pkg/... -coverprofile cover.out
+
+.PHONY: test-integration
+test-integration: envtest ## Run integration tests with envtest.
+	KUBEBUILDER_ASSETS="$(shell $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --print path)" \
+		go test ./test/integration/ -v
+
+.PHONY: test-all
+test-all: test test-integration ## Run all tests (unit + integration).
 
 .PHONY: test-e2e-live
 test-e2e-live: ## Run e2e tests against live NICo API.
@@ -99,3 +110,10 @@ catalog-build: ## Build the FBC catalog image.
 .PHONY: catalog-push
 catalog-push: ## Push the FBC catalog image.
 	docker push $(CATALOG_IMG)
+
+##@ Tools
+
+.PHONY: envtest
+envtest: $(SETUP_ENVTEST) ## Install setup-envtest if needed.
+$(SETUP_ENVTEST):
+	go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest

@@ -37,7 +37,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	nico "github.com/NVIDIA/ncx-infra-controller-rest/sdk/standard"
+	nico "github.com/NVIDIA/infra-controller/rest-api/sdk/standard"
 	v1beta1 "github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/apis/nicoprovider/v1beta1"
 	"github.com/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/providerid"
 )
@@ -70,12 +70,13 @@ type mockNicoClient struct {
 	getInstanceStatusHistory func(
 		ctx context.Context, org string, instanceId string,
 	) ([]nico.StatusDetail, *http.Response, error)
-	listFaultEvents func(
-		ctx context.Context, org string, machineId string, state string,
-	) ([]nico.FaultEvent, *http.Response, error)
-	ingestFaultEvent func(
-		ctx context.Context, org string, req nico.FaultIngestionRequest,
-	) (*nico.FaultEvent, *http.Response, error)
+	getAllMachineHealthReport func(
+		ctx context.Context, org string, machineId string,
+	) ([]nico.MachineHealthReportEntry, *http.Response, error)
+	createOrUpdateMachineHealthReport func(
+		ctx context.Context, org string, machineId string,
+		req nico.MachineHealthReportEntryRequest,
+	) (*nico.MachineHealthReportEntry, *http.Response, error)
 	getCurrentTenant func(
 		ctx context.Context, org string,
 	) (*nico.Tenant, *http.Response, error)
@@ -137,21 +138,22 @@ func (m *mockNicoClient) UpdateInstance(
 	return nil, &http.Response{StatusCode: 200}, nil
 }
 
-func (m *mockNicoClient) ListFaultEvents(
-	ctx context.Context, org string, machineId string, state string,
-) ([]nico.FaultEvent, *http.Response, error) {
-	if m.listFaultEvents != nil {
-		return m.listFaultEvents(ctx, org, machineId, state)
+func (m *mockNicoClient) GetAllMachineHealthReport(
+	ctx context.Context, org string, machineId string,
+) ([]nico.MachineHealthReportEntry, *http.Response, error) {
+	if m.getAllMachineHealthReport != nil {
+		return m.getAllMachineHealthReport(ctx, org, machineId)
 	}
 	// Default: API unavailable (triggers JSONB fallback)
 	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
 
-func (m *mockNicoClient) IngestFaultEvent(
-	ctx context.Context, org string, req nico.FaultIngestionRequest,
-) (*nico.FaultEvent, *http.Response, error) {
-	if m.ingestFaultEvent != nil {
-		return m.ingestFaultEvent(ctx, org, req)
+func (m *mockNicoClient) CreateOrUpdateMachineHealthReport(
+	ctx context.Context, org string, machineId string,
+	req nico.MachineHealthReportEntryRequest,
+) (*nico.MachineHealthReportEntry, *http.Response, error) {
+	if m.createOrUpdateMachineHealthReport != nil {
+		return m.createOrUpdateMachineHealthReport(ctx, org, machineId, req)
 	}
 	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
@@ -624,7 +626,7 @@ func TestUpdate_HealthIntegration(t *testing.T) {
 				Id: &machineID,
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
-						{},
+						{Id: "alert-1", Message: "unknown issue"},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -728,8 +730,8 @@ func TestDelete_MHCRemediation(t *testing.T) {
 	if capturedDeleteReq.MachineHealthIssue == nil {
 		t.Fatal("Delete() should have set MachineHealthIssue")
 	}
-	if *capturedDeleteReq.MachineHealthIssue.Category != "MachineHealthCheck" {
-		t.Errorf("Expected category MachineHealthCheck, got %s", *capturedDeleteReq.MachineHealthIssue.Category)
+	if capturedDeleteReq.MachineHealthIssue.Category != "MachineHealthCheck" {
+		t.Errorf("Expected category MachineHealthCheck, got %s", capturedDeleteReq.MachineHealthIssue.Category)
 	}
 }
 
@@ -779,7 +781,7 @@ func TestUpdate_StatusHistoryOnError(t *testing.T) {
 			provStr := string(nico.INSTANCESTATUS_PROVISIONING)
 			return []nico.StatusDetail{
 				{Status: &provStr, Created: &now},
-				{Status: &errorStr, Message: &errorMsg, Created: &now},
+				{Status: &errorStr, Message: *nico.NewNullableString(&errorMsg), Created: &now},
 			}, &http.Response{StatusCode: 200}, nil
 		},
 	}
@@ -1040,7 +1042,7 @@ func TestClassifyAlerts(t *testing.T) {
 		{
 			name: "critical classification",
 			alerts: []nico.MachineHealthProbeAlert{
-				{Classifications: []string{severityCritical}},
+				{Id: "a1", Message: "err", Classifications: []string{severityCritical}},
 			},
 			wantCritical: 1,
 			wantWarning:  0,
@@ -1048,7 +1050,7 @@ func TestClassifyAlerts(t *testing.T) {
 		{
 			name: "warning classification",
 			alerts: []nico.MachineHealthProbeAlert{
-				{Classifications: []string{severityWarning}},
+				{Id: "a1", Message: "warn", Classifications: []string{severityWarning}},
 			},
 			wantCritical: 0,
 			wantWarning:  1,
@@ -1056,7 +1058,7 @@ func TestClassifyAlerts(t *testing.T) {
 		{
 			name: "no classification defaults to critical",
 			alerts: []nico.MachineHealthProbeAlert{
-				{Classifications: nil},
+				{Id: "a1", Message: "unknown", Classifications: nil},
 			},
 			wantCritical: 1,
 			wantWarning:  0,
@@ -1064,9 +1066,9 @@ func TestClassifyAlerts(t *testing.T) {
 		{
 			name: "mixed classifications",
 			alerts: []nico.MachineHealthProbeAlert{
-				{Classifications: []string{severityCritical}},
-				{Classifications: []string{severityWarning}},
-				{Classifications: []string{"unknown-type"}},
+				{Id: "a1", Message: "err", Classifications: []string{severityCritical}},
+				{Id: "a2", Message: "warn", Classifications: []string{severityWarning}},
+				{Id: "a3", Message: "other", Classifications: []string{"unknown-type"}},
 			},
 			wantCritical: 2,
 			wantWarning:  1,
@@ -1074,7 +1076,7 @@ func TestClassifyAlerts(t *testing.T) {
 		{
 			name: "alert with both critical and warning is critical",
 			alerts: []nico.MachineHealthProbeAlert{
-				{Classifications: []string{severityWarning, severityCritical}},
+				{Id: "a1", Message: "mixed", Classifications: []string{severityWarning, severityCritical}},
 			},
 			wantCritical: 1,
 			wantWarning:  0,
@@ -1104,13 +1106,13 @@ func TestUpdate_HealthClassification_Critical(t *testing.T) {
 			return inst, &http.Response{StatusCode: 200}, nil
 		},
 		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
-			msg := "GPU memory ECC error"
 			return &nico.Machine{
 				Id: &machineID,
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
-							Message:         &msg,
+							Id:              "alert-1",
+							Message:         "GPU memory ECC error",
 							Classifications: []string{severityCritical},
 						},
 					},
@@ -1143,7 +1145,7 @@ func TestUpdate_HealthClassification_WarningOnly(t *testing.T) {
 				Id: &machineID,
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
-						{Classifications: []string{severityWarning}},
+						{Id: "alert-1", Message: "minor", Classifications: []string{severityWarning}},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -1170,13 +1172,13 @@ func TestUpdate_NicoFaultRemediation(t *testing.T) {
 			return inst, &http.Response{StatusCode: 200}, nil
 		},
 		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
-			msg := "GPU reset in progress"
 			return &nico.Machine{
 				Id: &machineID,
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
-							Message:         &msg,
+							Id:              "alert-1",
+							Message:         "GPU reset in progress",
 							Classifications: []string{severityCritical, severityRemediating},
 						},
 					},
@@ -1225,9 +1227,12 @@ func TestDelete_MHCRemediation_EnrichedDetails(t *testing.T) {
 	}
 
 	// Verify enriched summary includes machine name
-	summary := *capturedDeleteReq.MachineHealthIssue.Summary
-	if !strings.Contains(summary, "test-machine") {
-		t.Errorf("Expected summary to contain machine name, got: %s", summary)
+	summaryPtr := capturedDeleteReq.MachineHealthIssue.Summary.Get()
+	if summaryPtr == nil {
+		t.Fatal("Expected Summary to be set")
+	}
+	if !strings.Contains(*summaryPtr, "test-machine") {
+		t.Errorf("Expected summary to contain machine name, got: %s", *summaryPtr)
 	}
 
 	// Verify details contain structured metadata
@@ -1245,7 +1250,6 @@ func TestDelete_MHCRemediation_EnrichedDetails(t *testing.T) {
 
 func TestCreate_PreFlightHealthCheck_BlocksCreation(t *testing.T) {
 	createCalled := false
-	msg := "GPU memory ECC error"
 	mock := &mockNicoClient{
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,
@@ -1259,7 +1263,8 @@ func TestCreate_PreFlightHealthCheck_BlocksCreation(t *testing.T) {
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
-							Message:         &msg,
+							Id:              "alert-1",
+							Message:         "GPU memory ECC error",
 							Classifications: []string{severityCritical},
 						},
 					},
@@ -1395,7 +1400,6 @@ func TestCreate_PreFlightHealthCheck_FailureReasonAfterMaxAttempts(t *testing.T)
 	MaxFaultBlockedAttempts = 2
 	defer func() { MaxFaultBlockedAttempts = origMax }()
 
-	msg := "Persistent GPU fault"
 	mock := &mockNicoClient{
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,
@@ -1408,7 +1412,8 @@ func TestCreate_PreFlightHealthCheck_FailureReasonAfterMaxAttempts(t *testing.T)
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
-							Message:         &msg,
+							Id:              "alert-1",
+							Message:         "Persistent GPU fault",
 							Classifications: []string{severityCritical},
 						},
 					},
@@ -1444,32 +1449,25 @@ func TestCreate_PreFlightHealthCheck_FailureReasonAfterMaxAttempts(t *testing.T)
 	}
 }
 
-func tenantWithFaultManagement() func(context.Context, string) (*nico.Tenant, *http.Response, error) {
-	return func(ctx context.Context, org string) (*nico.Tenant, *http.Response, error) {
-		caps := &nico.TenantCapabilities{}
-		caps.SetFaultManagement(true)
-		return &nico.Tenant{Capabilities: caps}, &http.Response{StatusCode: 200}, nil
-	}
-}
-
-func TestUpdate_HealthFromFaultEventsAPI(t *testing.T) {
+func TestUpdate_HealthFromHealthReportAPI(t *testing.T) {
 	instanceID := uuid.New().String()
 
 	mock := &mockNicoClient{
-		getCurrentTenant: tenantWithFaultManagement(),
 		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			return inst, &http.Response{StatusCode: 200}, nil
 		},
-		listFaultEvents: func(
-			ctx context.Context, org, machineId, state string,
-		) ([]nico.FaultEvent, *http.Response, error) {
-			sev := severityCritical
-			msg := "GPU ECC uncorrectable error"
-			cls := "gpu-ecc-error"
-			st := "open"
-			return []nico.FaultEvent{
-				{Severity: &sev, Message: &msg, Classification: &cls, State: &st},
+		getAllMachineHealthReport: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
+			return []nico.MachineHealthReportEntry{
+				{
+					Source: "hardware-monitor",
+					Mode:   "replace",
+					Alerts: []nico.MachineHealthProbeAlert{
+						{Id: "alert-1", Message: "GPU ECC uncorrectable error", Classifications: []string{severityCritical}},
+					},
+				},
 			}, &http.Response{StatusCode: 200}, nil
 		},
 	}
@@ -1484,23 +1482,25 @@ func TestUpdate_HealthFromFaultEventsAPI(t *testing.T) {
 	}
 }
 
-func TestUpdate_HealthFromFaultEventsAPI_Remediating(t *testing.T) {
+func TestUpdate_HealthFromHealthReportAPI_Remediating(t *testing.T) {
 	instanceID := uuid.New().String()
 
 	mock := &mockNicoClient{
-		getCurrentTenant: tenantWithFaultManagement(),
 		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			return inst, &http.Response{StatusCode: 200}, nil
 		},
-		listFaultEvents: func(
-			ctx context.Context, org, machineId, state string,
-		) ([]nico.FaultEvent, *http.Response, error) {
-			sev := severityCritical
-			msg := "GPU reset in progress"
-			st := severityRemediating
-			return []nico.FaultEvent{
-				{Severity: &sev, Message: &msg, State: &st},
+		getAllMachineHealthReport: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
+			return []nico.MachineHealthReportEntry{
+				{
+					Source: "hardware-monitor",
+					Mode:   "replace",
+					Alerts: []nico.MachineHealthProbeAlert{
+						{Id: "alert-1", Message: "GPU reset in progress", Classifications: []string{severityCritical, severityRemediating}},
+					},
+				},
 			}, &http.Response{StatusCode: 200}, nil
 		},
 	}
@@ -1515,19 +1515,18 @@ func TestUpdate_HealthFromFaultEventsAPI_Remediating(t *testing.T) {
 	}
 }
 
-func TestUpdate_HealthFromFaultEventsAPI_NoFaults(t *testing.T) {
+func TestUpdate_HealthFromHealthReportAPI_NoAlerts(t *testing.T) {
 	instanceID := uuid.New().String()
 
 	mock := &mockNicoClient{
-		getCurrentTenant: tenantWithFaultManagement(),
 		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
 			inst := testInstance(instanceID)
 			return inst, &http.Response{StatusCode: 200}, nil
 		},
-		listFaultEvents: func(
-			ctx context.Context, org, machineId, state string,
-		) ([]nico.FaultEvent, *http.Response, error) {
-			return []nico.FaultEvent{}, &http.Response{StatusCode: 200}, nil
+		getAllMachineHealthReport: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
+			return []nico.MachineHealthReportEntry{}, &http.Response{StatusCode: 200}, nil
 		},
 	}
 
@@ -1541,22 +1540,23 @@ func TestUpdate_HealthFromFaultEventsAPI_NoFaults(t *testing.T) {
 	}
 }
 
-func TestDelete_MHCRemediation_IngestsFaultEvent(t *testing.T) {
-	var capturedIngestReq *nico.FaultIngestionRequest
+func TestDelete_MHCRemediation_ReportsHealthIssue(t *testing.T) {
+	var capturedReq *nico.MachineHealthReportEntryRequest
+	var capturedMachineId string
 	mock := &mockNicoClient{
-		getCurrentTenant: tenantWithFaultManagement(),
 		deleteInstance: func(
 			ctx context.Context, org string, instanceId string,
 			deleteReq *nico.InstanceDeleteRequest,
 		) (*http.Response, error) {
 			return &http.Response{StatusCode: 200}, nil
 		},
-		ingestFaultEvent: func(
-			ctx context.Context, org string, req nico.FaultIngestionRequest,
-		) (*nico.FaultEvent, *http.Response, error) {
-			capturedIngestReq = &req
-			id := "fault-123"
-			return &nico.FaultEvent{Id: &id}, &http.Response{StatusCode: 201}, nil
+		createOrUpdateMachineHealthReport: func(
+			ctx context.Context, org string, machineId string,
+			req nico.MachineHealthReportEntryRequest,
+		) (*nico.MachineHealthReportEntry, *http.Response, error) {
+			capturedReq = &req
+			capturedMachineId = machineId
+			return &nico.MachineHealthReportEntry{Source: req.Source, Mode: req.Mode}, &http.Response{StatusCode: 200}, nil
 		},
 	}
 
@@ -1575,41 +1575,43 @@ func TestDelete_MHCRemediation_IngestsFaultEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delete() unexpected error: %v", err)
 	}
-	if capturedIngestReq == nil {
-		t.Fatal("Delete() should have called IngestFaultEvent for MHC remediation")
+	if capturedReq == nil {
+		t.Fatal("Delete() should have called CreateOrUpdateMachineHealthReport for MHC remediation")
 	}
-	if capturedIngestReq.Source != "k8s-mhc" {
-		t.Errorf("Expected source=k8s-mhc, got %s", capturedIngestReq.Source)
+	if capturedReq.Source != "k8s-mhc" {
+		t.Errorf("Expected source=k8s-mhc, got %s", capturedReq.Source)
 	}
-	if capturedIngestReq.Severity != severityCritical {
-		t.Errorf("Expected severity=critical, got %s", capturedIngestReq.Severity)
+	if capturedMachineId != machineID {
+		t.Errorf("Expected machineId=%s, got %s", machineID, capturedMachineId)
 	}
-	if capturedIngestReq.MachineId == nil || *capturedIngestReq.MachineId != machineID {
-		t.Errorf("Expected machineId=%s, got %v", machineID, capturedIngestReq.MachineId)
+	if len(capturedReq.Alerts) == 0 {
+		t.Fatal("Expected at least one alert in health report request")
 	}
-	if !strings.Contains(capturedIngestReq.Message, "test-machine") {
-		t.Errorf("Expected message to contain machine name, got: %s", capturedIngestReq.Message)
+	if !strings.Contains(capturedReq.Alerts[0].Message, "test-machine") {
+		t.Errorf("Expected alert message to contain machine name, got: %s", capturedReq.Alerts[0].Message)
 	}
 }
 
-func TestCreate_PreFlightHealthCheck_UsesFaultEventsAPI(t *testing.T) {
+func TestCreate_PreFlightHealthCheck_UsesHealthReportAPI(t *testing.T) {
 	createCalled := false
 	mock := &mockNicoClient{
-		getCurrentTenant: tenantWithFaultManagement(),
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,
 		) (*nico.Instance, *http.Response, error) {
 			createCalled = true
 			return testInstance(uuid.New().String()), &http.Response{StatusCode: 201}, nil
 		},
-		listFaultEvents: func(
-			ctx context.Context, org, machineId, state string,
-		) ([]nico.FaultEvent, *http.Response, error) {
-			sev := severityCritical
-			msg := "Persistent GPU fault"
-			st := "open"
-			return []nico.FaultEvent{
-				{Severity: &sev, Message: &msg, State: &st},
+		getAllMachineHealthReport: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
+			return []nico.MachineHealthReportEntry{
+				{
+					Source: "hardware-monitor",
+					Mode:   "replace",
+					Alerts: []nico.MachineHealthProbeAlert{
+						{Id: "alert-1", Message: "Persistent GPU fault", Classifications: []string{severityCritical}},
+					},
+				},
 			}, &http.Response{StatusCode: 200}, nil
 		},
 	}
@@ -1623,7 +1625,7 @@ func TestCreate_PreFlightHealthCheck_UsesFaultEventsAPI(t *testing.T) {
 
 	err := actuator.Create(context.Background(), machine)
 	if err == nil {
-		t.Fatal("Create() expected error when fault events API reports critical faults")
+		t.Fatal("Create() expected error when health report API reports critical alerts")
 	}
 	if createCalled {
 		t.Error("Create() should not have called CreateInstance")
@@ -1643,7 +1645,7 @@ func TestCreate_PreFlightHealthCheck_WarningOnlyAllowsCreation(t *testing.T) {
 				Id: &mid,
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
-						{Classifications: []string{severityWarning}},
+						{Id: "alert-1", Message: "minor", Classifications: []string{severityWarning}},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil

@@ -32,19 +32,18 @@ NVIDIA_CARBIDE_API_ENDPOINT=https://... go test ./test/e2e/ -v
 
 ## SDK
 
-Uses `github.com/NVIDIA/ncx-infra-controller-rest v1.2.0`.
+Uses `github.com/NVIDIA/infra-controller/rest-api/sdk/standard`.
 go.mod uses a local `replace` directive:
 ```
-replace github.com/NVIDIA/ncx-infra-controller-rest => ../../NVIDIA/ncx-infra-controller-rest
+replace github.com/NVIDIA/infra-controller/rest-api/sdk/standard => ../../NVIDIA/infra-controller/rest-api/sdk/standard
 ```
-This requires a local checkout of the NICo REST repo until
-upstream publishes a tagged release with HealthAPI support.
+This requires a local checkout of the infra-controller repo.
 
 ## Current status
 
-v0.2.0, alpha. Full NEP-0007 fault management integration.
-Health features gated behind `TenantCapabilities.FaultManagement`
-with JSONB fallback when capability is disabled.
+v0.3.0, alpha. Health management via HealthReport API.
+Health features use HealthReport API with JSONB fallback when
+API is unavailable.
 
 ---
 
@@ -57,41 +56,39 @@ Provider ID scheme changed from `nvidia-carbide://` to `nico://`.
 Finalizer changed to `machine.openshift.io/nico` with legacy
 finalizer removal on delete.
 
-### ~~2. Replace JSONB health parsing with structured fault API~~ (DONE)
+### ~~2. Replace JSONB health parsing with structured health API~~ (DONE)
 
-`updateMachineHealth()` checks `TenantCapabilities.FaultManagement`.
-If enabled, calls `ListFaultEvents(machineId, "open")` via the
-HealthAPI and maps `FaultEvent` fields to conditions:
-- Critical severity → `MachineHealthy=False` with reason from
-  `classification` and message from `message`
-- Warning severity → `MachineHealthy=True` with
-  `HealthyWithWarnings` reason
-- No faults → `MachineHealthy=True`
-- `FaultEvent.State == "remediating"` →
-  `NicoFaultRemediation=True`
+`updateMachineHealth()` calls `GetAllMachineHealthReport(org,
+machineId)` via the HealthReport API and aggregates alerts from
+all report entries, classifying by `Classifications`:
+- Critical → `MachineHealthy=False` with reason from
+  classification and message from alert
+- Warning → `MachineHealthy=True` with `HealthyWithWarnings`
+- No alerts → `MachineHealthy=True`
+- Remediating classification → `NicoFaultRemediation=True`
 
 Falls back to `GetMachine().Health.Alerts` JSONB parsing when
-fault-management capability is disabled. JSONB path uses
-`MachineHealthProbeAlert.Classifications` for severity mapping
-(critical/warning/unclassified defaults to critical).
+HealthReport API is unavailable. No capability gating — always
+tries HealthReport API first.
 
 ### ~~3. Close the MHC remediation loop~~ (DONE)
 
 On MHC-triggered deletion (annotation
-`machine.openshift.io/unhealthy`), if fault-management capability
-is enabled, calls `IngestFaultEvent` with:
-- source=`k8s-mhc`, severity=`critical`, component=`node`
-- classification=`mhc-remediation-triggered`
-- Machine metadata (name, namespace, annotation, timestamp)
-- `machine_id` from provider status
+`machine.openshift.io/unhealthy`), if a physical machine ID is
+known, calls `CreateOrUpdateMachineHealthReport` with:
+- source=`k8s-mhc`, mode=`replace`
+- Alert with id=`mhc-remediation-triggered`,
+  classification=`critical`
+- Message includes machine name
 
 Also sets `MachineHealthIssue` on `InstanceDeleteRequest` as
-belt-and-suspenders fallback. Ingestion failure is non-fatal.
+belt-and-suspenders fallback. Report failure is non-fatal.
 
 ### ~~4. Pre-flight fault check before instance creation~~ (DONE)
 
 In `Create()`, for targeted allocations (`machineId`), checks
-critical faults via `ListFaultEvents` (with JSONB fallback).
+critical faults via `GetAllMachineHealthReport` (with JSONB
+fallback).
 - Critical faults → block creation, record
   `FaultBlockedCreation` event, return error (controller
   requeues)
@@ -143,21 +140,20 @@ Unit tests cover:
 - Provider ID parsing (both schemes, 3 and 4 segments, invalid)
 - Delete error scenarios (500, 202 accepted, nil instance)
 - Alert classification (critical, warning, unclassified, mixed)
-- HealthAPI fault events path (critical, warning, remediating,
-  no faults)
+- HealthReport API path (critical, warning, remediating,
+  no alerts)
 - JSONB fallback path (critical, warning, remediation)
-- MHC remediation with `IngestFaultEvent` and enriched details
+- MHC remediation with `CreateOrUpdateMachineHealthReport`
+  and enriched details
 - Pre-flight health check (blocks creation, allows healthy,
   skipped for instanceTypeId, skipped for AllowUnhealthy,
-  uses fault events API, warning-only allows creation,
+  uses HealthReport API, warning-only allows creation,
   FailureReason after max attempts)
 
 ## Design constraints
 
-- All health features guarded behind
-  `TenantCapabilities.FaultManagement` capability check
-- Graceful degradation: fall back to JSONB parsing if
-  fault-management capability is disabled
+- Health features try HealthReport API first, fall back to
+  JSONB parsing if API is unavailable
 - Follow OpenShift Machine API conventions for conditions and
   events
 - Provider ID and finalizer changes handle upgrade from old

@@ -20,12 +20,11 @@ jobs:
       - name: Checkout provider
         uses: actions/checkout@v4
 
-      - name: Checkout ncx-infra-controller-rest (fork with HealthAPI)
+      - name: Checkout NVIDIA infra-controller
         uses: actions/checkout@v4
         with:
-          repository: fabiendupont/nvidia-ncx-infra-controller-rest
-          ref: feat/extensible-architecture
-          path: ncx-infra-controller-rest
+          repository: NVIDIA/infra-controller
+          path: infra-controller
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -37,7 +36,7 @@ jobs:
 
       - name: Deploy NICo REST stack
         run: make kind-reset
-        working-directory: ncx-infra-controller-rest
+        working-directory: infra-controller/rest-api
         timeout-minutes: 20
         env:
           KUBECONFIG: ""
