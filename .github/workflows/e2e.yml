@@ -19,24 +19,26 @@ jobs:
     steps:
       - name: Checkout provider
         uses: actions/checkout@v4
+        with:
+          path: fabiendupont/machine-api-provider-nvidia-ncx-infra-controller
 
       - name: Checkout NVIDIA infra-controller
         uses: actions/checkout@v4
         with:
           repository: NVIDIA/infra-controller
-          path: infra-controller
+          path: NVIDIA/infra-controller
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/go.mod
 
       - name: Increase inotify limits
         run: sudo sysctl -w fs.inotify.max_user_instances=512
 
       - name: Deploy NICo REST stack
         run: make kind-reset
-        working-directory: infra-controller/rest-api
+        working-directory: NVIDIA/infra-controller/rest-api
         timeout-minutes: 20
         env:
           KUBECONFIG: ""
@@ -58,13 +60,16 @@ jobs:
 
       - name: Install Machine API CRDs
         run: kubectl apply -f config/crd/external/
+        working-directory: fabiendupont/machine-api-provider-nvidia-ncx-infra-controller
 
       - name: Build and load provider image
+        working-directory: fabiendupont/machine-api-provider-nvidia-ncx-infra-controller
         run: |
           make docker-build IMG=$IMG
           kind load docker-image $IMG --name carbide-rest-local
 
       - name: Deploy provider controller
+        working-directory: fabiendupont/machine-api-provider-nvidia-ncx-infra-controller
         run: |
           kubectl apply -f config/manager/namespace.yaml
           kubectl apply -f config/rbac/
@@ -76,6 +81,7 @@ jobs:
 
       - name: Run e2e tests
         run: make test-e2e-live
+        working-directory: fabiendupont/machine-api-provider-nvidia-ncx-infra-controller
 
       - name: Dump controller logs on failure
         if: failure()

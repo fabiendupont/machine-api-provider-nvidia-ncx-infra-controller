@@ -20,6 +20,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          path: fabiendupont/machine-api-provider-nvidia-ncx-infra-controller
+
+      - name: Checkout NVIDIA infra-controller
+        uses: actions/checkout@v4
+        with:
+          repository: NVIDIA/infra-controller
+          path: NVIDIA/infra-controller
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,6 +55,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

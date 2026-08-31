@@ -1,30 +1,34 @@
 # Build the manager binary
-FROM golang:1.25 AS builder
+# Build context must include both the provider repo and the NVIDIA
+# infra-controller SDK. Use `docker build -f Dockerfile ../..` from
+# the provider repo, or set context to the workspace root in CI.
+FROM golang:1.26 AS builder
 
 WORKDIR /workspace
 
-# Copy the Go Modules manifests
-COPY go.mod go.mod
-COPY go.sum go.sum
+# Copy the SDK dependency first for layer caching
+COPY NVIDIA/infra-controller/rest-api/sdk/standard/ NVIDIA/infra-controller/rest-api/sdk/standard/
 
-# Cache deps before building and copying source so that we don't need to re-download as much
-# and so that source changes don't invalidate our downloaded layer
+# Copy the Go Modules manifests
+COPY fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/go.mod fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/go.mod
+COPY fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/go.sum fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/go.sum
+
+WORKDIR /workspace/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller
+
 RUN go mod download
 
 # Copy the go source
-COPY cmd/ cmd/
-COPY pkg/ pkg/
+COPY fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/cmd/ cmd/
+COPY fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/pkg/ pkg/
 
 # Build
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o manager cmd/manager/main.go
 
-# Use distroless as minimal base image to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM gcr.io/distroless/static:nonroot
 
 WORKDIR /
 
-COPY --from=builder /workspace/manager .
+COPY --from=builder /workspace/fabiendupont/machine-api-provider-nvidia-ncx-infra-controller/manager .
 
 USER 65532:65532
 
