@@ -30,6 +30,9 @@ linters:
         - name: import-shadowing
   exclusions:
     generated: lax
+    rules:
+      - linters: [dupl]
+        path: _test\.go
     paths:
       - third_party$
       - builtin$
