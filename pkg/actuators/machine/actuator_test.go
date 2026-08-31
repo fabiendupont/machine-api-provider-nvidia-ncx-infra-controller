@@ -34,7 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	nico "github.com/NVIDIA/infra-controller/rest-api/sdk/standard"
@@ -215,13 +215,13 @@ func newTestActuator(mock *mockNicoClient) *Actuator {
 		WithScheme(scheme).
 		Build()
 
-	recorder := record.NewFakeRecorder(10)
+	recorder := events.NewFakeRecorder(10)
 	return NewActuatorWithClient(fakeClient, recorder, mock, "test-org")
 }
 
 func newTestActuatorWithMachine(
 	mock *mockNicoClient, machine *machinev1beta1.Machine,
-) (*Actuator, *record.FakeRecorder) {
+) (*Actuator, *events.FakeRecorder) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = machinev1beta1.AddToScheme(scheme)
@@ -232,7 +232,7 @@ func newTestActuatorWithMachine(
 		WithStatusSubresource(machine).
 		Build()
 
-	recorder := record.NewFakeRecorder(10)
+	recorder := events.NewFakeRecorder(10)
 	actuator := NewActuatorWithClient(fakeClient, recorder, mock, "test-org")
 	return actuator, recorder
 }

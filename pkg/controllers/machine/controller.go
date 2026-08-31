@@ -25,7 +25,7 @@ import (
 	machinev1beta1 "github.com/openshift/api/machine/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -50,7 +50,7 @@ type MachineReconciler struct {
 	client.Client
 	Scheme        *runtime.Scheme
 	Actuator      *machine.Actuator
-	EventRecorder record.EventRecorder
+	EventRecorder events.EventRecorder
 }
 
 // Reconcile handles Machine reconciliation
@@ -86,7 +86,7 @@ func (r *MachineReconciler) reconcileNormal(ctx context.Context, machineObj clie
 		if err := r.Update(ctx, machineObj); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
 	// Check if instance exists
@@ -172,7 +172,7 @@ func SetupMachineController(mgr ctrl.Manager, actuator *machine.Actuator) error 
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Actuator:      actuator,
-		EventRecorder: mgr.GetEventRecorderFor("nico-machine-controller"),
+		EventRecorder: mgr.GetEventRecorder("nico-machine-controller"),
 	}
 
 	return reconciler.SetupWithManager(mgr)

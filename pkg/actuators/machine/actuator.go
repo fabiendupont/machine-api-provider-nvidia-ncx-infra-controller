@@ -33,7 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	nico "github.com/NVIDIA/infra-controller/rest-api/sdk/standard"
@@ -233,14 +233,14 @@ func classifyHTTPError(httpResp *http.Response, err error) error {
 // Actuator implements the OpenShift Machine actuator interface
 type Actuator struct {
 	client        client.Client
-	eventRecorder record.EventRecorder
+	eventRecorder events.EventRecorder
 	// For testing
 	nicoAPIClient NicoClientInterface
 	orgName       string
 }
 
 // NewActuator creates a new machine actuator
-func NewActuator(k8sClient client.Client, eventRecorder record.EventRecorder) *Actuator {
+func NewActuator(k8sClient client.Client, eventRecorder events.EventRecorder) *Actuator {
 	return &Actuator{
 		client:        k8sClient,
 		eventRecorder: eventRecorder,
@@ -249,7 +249,7 @@ func NewActuator(k8sClient client.Client, eventRecorder record.EventRecorder) *A
 
 // NewActuatorWithClient creates a new machine actuator with injected client (for testing)
 func NewActuatorWithClient(
-	k8sClient client.Client, eventRecorder record.EventRecorder,
+	k8sClient client.Client, eventRecorder events.EventRecorder,
 	nicoAPIClient NicoClientInterface, orgName string,
 ) *Actuator {
 	return &Actuator{
@@ -404,7 +404,7 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	// Validate provider spec
 	if err := validateProviderSpec(providerSpec); err != nil {
 		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "InvalidSpec", "Invalid provider spec: %v", err)
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "InvalidSpec", "", "Invalid provider spec: %v", err)
 		}
 		return fmt.Errorf("invalid provider spec: %w", err)
 	}
@@ -443,8 +443,7 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	}
 	if instance == nil {
 		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj,
-				corev1.EventTypeWarning, "FailedCreate",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "FailedCreate", "",
 				"Create instance returned no data")
 		}
 		return fmt.Errorf(
@@ -509,7 +508,7 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 
 	nicometrics.MachinesManaged.Inc()
 	if a.eventRecorder != nil {
-		a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "Created", "Created instance %s", *instance.Id)
+		a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeNormal, "Created", "", "Created instance %s", *instance.Id)
 	}
 	return nil
 }
@@ -683,7 +682,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		// Report a health issue via the HealthReport API so NICo's
 		// remediation workflow can attempt repair.
 		if providerStatus.MachineID != nil {
-			a.reportMHCHealthIssue(ctx, nicoAPIClient, orgName, machineObj, providerStatus, now)
+			a.reportMHCHealthIssue(ctx, nicoAPIClient, orgName, machineObj, providerStatus)
 		}
 
 		// Also set MachineHealthIssue on the delete request as fallback
@@ -700,7 +699,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 			},
 		}
 		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "MHCRemediation",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeNormal, "MHCRemediation", "",
 				"Reporting machine health issue to NICo for break-fix workflow")
 		}
 	}
@@ -717,13 +716,13 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		// Treat 404 as success (instance already deleted)
 		if httpResp != nil && httpResp.StatusCode == 404 {
 			if a.eventRecorder != nil {
-				a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "Deleted",
+				a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeNormal, "Deleted", "",
 					"Instance %s already deleted (404)", *providerStatus.InstanceID)
 			}
 		} else {
 			nicometrics.APICallErrors.WithLabelValues("DeleteInstance", statusCode).Inc()
 			if a.eventRecorder != nil {
-				a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedDelete", "Failed to delete instance: %v", err)
+				a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "FailedDelete", "", "Failed to delete instance: %v", err)
 			}
 			return fmt.Errorf("failed to delete instance: %w", err)
 		}
@@ -731,7 +730,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		httpResp.StatusCode != 204 && httpResp.StatusCode != 404 {
 		// Accept 200 (OK), 202 (Accepted/async), 204 (No Content), 404 (already gone)
 		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FailedDelete",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "FailedDelete", "",
 				"Delete instance returned unexpected status: %d", httpResp.StatusCode)
 		}
 		return fmt.Errorf("delete instance returned unexpected status: %d", httpResp.StatusCode)
@@ -739,7 +738,7 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 
 	nicometrics.MachinesManaged.Dec()
 	if a.eventRecorder != nil {
-		a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "Deleted",
+		a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeNormal, "Deleted", "",
 			"Deleted instance %s", *providerStatus.InstanceID)
 	}
 	return nil
@@ -1009,8 +1008,7 @@ func (a *Actuator) handleCreateError(
 	}
 
 	if a.eventRecorder != nil {
-		a.eventRecorder.Eventf(machineObj,
-			corev1.EventTypeWarning, "FailedCreate",
+		a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "FailedCreate", "",
 			"NICo API error (%s): %v", errKind, err)
 	}
 
@@ -1078,8 +1076,7 @@ func (a *Actuator) deployDpuExtensionServices(
 			"UpdateInstance", statusCode,
 		).Inc()
 		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj,
-				corev1.EventTypeWarning, "DPUDeployFailed",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "DPUDeployFailed", "",
 				"Failed to deploy DPU extension services: %v",
 				updateErr)
 		}
@@ -1088,8 +1085,7 @@ func (a *Actuator) deployDpuExtensionServices(
 		)
 	}
 	if a.eventRecorder != nil {
-		a.eventRecorder.Eventf(machineObj,
-			corev1.EventTypeNormal, "DPUDeployed",
+		a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeNormal, "DPUDeployed", "",
 			"Deployed %d DPU extension service(s)",
 			len(providerSpec.DpuExtensionServices))
 	}
@@ -1152,7 +1148,7 @@ func (a *Actuator) checkStatusHistory(
 		if !stuck {
 			return
 		}
-		a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "ProvisioningStuck",
+		a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "ProvisioningStuck", "",
 			"Instance has been in Provisioning state for more than %s", provisioningStuckThreshold)
 
 		// Also fetch physical machine status history if a machine is assigned
@@ -1176,10 +1172,10 @@ func (a *Actuator) checkStatusHistory(
 			ts = entry.Created.Format(time.RFC3339)
 		}
 		if msg != "" {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "StatusHistory",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "StatusHistory", "",
 				"[%s] %s: %s", ts, status, msg)
 		} else {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "StatusHistory",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "StatusHistory", "",
 				"[%s] %s", ts, status)
 		}
 	}
@@ -1215,10 +1211,10 @@ func (a *Actuator) emitMachineStatusHistory(
 			ts = entry.Created.Format(time.RFC3339)
 		}
 		if msg != "" {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "MachineStatusHistory",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "MachineStatusHistory", "",
 				"[%s] machine %s: %s: %s", ts, machineID, status, msg)
 		} else {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "MachineStatusHistory",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "MachineStatusHistory", "",
 				"[%s] machine %s: %s", ts, machineID, status)
 		}
 	}
@@ -1257,7 +1253,7 @@ func (a *Actuator) checkProvisioningTimeout(
 					m.Status.ErrorMessage = &msg
 				}
 				if a.eventRecorder != nil {
-					a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "ProvisioningTimeout",
+					a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "ProvisioningTimeout", "",
 						"Instance has not reached Ready state after %s, setting FailureReason", ProvisioningTimeout)
 				}
 			}
@@ -1380,7 +1376,7 @@ func (a *Actuator) checkPreFlightHealth(
 	}
 
 	if a.eventRecorder != nil {
-		a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "FaultBlockedCreation",
+		a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "FaultBlockedCreation", "",
 			"Instance creation blocked: %s (attempt %d/%d)", alertMsg, attempt, MaxFaultBlockedAttempts)
 	}
 
@@ -1397,7 +1393,6 @@ func (a *Actuator) reportMHCHealthIssue(
 	orgName string,
 	machineObj client.Object,
 	providerStatus *v1beta1.NicoMachineProviderStatus,
-	now time.Time,
 ) {
 	alert := nico.MachineHealthProbeAlert{
 		Id:              "mhc-remediation-triggered",
@@ -1416,7 +1411,7 @@ func (a *Actuator) reportMHCHealthIssue(
 	if err == nil && resp != nil && resp.StatusCode < 300 {
 		nicometrics.HealthEventsIngested.Inc()
 		if a.eventRecorder != nil {
-			a.eventRecorder.Eventf(machineObj, corev1.EventTypeNormal, "MHCHealthReported",
+			a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeNormal, "MHCHealthReported", "",
 				"Reported MHC health issue to NICo HealthReport API")
 		}
 	}
@@ -1687,7 +1682,7 @@ func (a *Actuator) updateMachineHealthFromReports(
 		resp, delErr := nicoAPIClient.DeleteMachineHealthReport(ctx, orgName, machineID, "k8s-mhc")
 		if delErr == nil && resp != nil && resp.StatusCode < 300 {
 			if a.eventRecorder != nil {
-				a.eventRecorder.Eventf(nil, corev1.EventTypeNormal, "MHCHealthReportCleared",
+				a.eventRecorder.Eventf(nil, nil, corev1.EventTypeNormal, "MHCHealthReportCleared", "",
 					"Cleared k8s-mhc health report for machine %s after recovery", machineID)
 			}
 		}

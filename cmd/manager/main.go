@@ -115,7 +115,7 @@ func main() {
 	// Create the actuator
 	actuator := machine.NewActuator(
 		mgr.GetClient(),
-		mgr.GetEventRecorderFor("nico-machine-controller"),
+		mgr.GetEventRecorder("nico-machine-controller"),
 	)
 
 	// Setup Machine reconciler
