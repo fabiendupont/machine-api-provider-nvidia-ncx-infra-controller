@@ -201,6 +201,24 @@ func (m *mockNicoClient) CreateOrUpdateMachineHealthReport(
 	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
 }
 
+func (m *mockNicoClient) DeleteMachineHealthReport(
+	ctx context.Context, org string, machineId string, source string,
+) (*http.Response, error) {
+	return mockHTTPResponse(404), fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetMachineValidationRuns(
+	ctx context.Context, org string, machineId string,
+) ([]nico.MachineValidationRun, *http.Response, error) {
+	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetMachineStatusHistory(
+	ctx context.Context, org string, machineId string,
+) ([]nico.StatusDetail, *http.Response, error) {
+	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
+}
+
 var _ = Describe("Machine Actuator Integration", func() {
 	var (
 		namespace *corev1.Namespace

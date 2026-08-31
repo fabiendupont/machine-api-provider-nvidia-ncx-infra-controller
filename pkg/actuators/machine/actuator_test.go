@@ -77,6 +77,15 @@ type mockNicoClient struct {
 		ctx context.Context, org string, machineId string,
 		req nico.MachineHealthReportEntryRequest,
 	) (*nico.MachineHealthReportEntry, *http.Response, error)
+	deleteMachineHealthReport func(
+		ctx context.Context, org string, machineId string, source string,
+	) (*http.Response, error)
+	getMachineValidationRuns func(
+		ctx context.Context, org string, machineId string,
+	) ([]nico.MachineValidationRun, *http.Response, error)
+	getMachineStatusHistory func(
+		ctx context.Context, org string, machineId string,
+	) ([]nico.StatusDetail, *http.Response, error)
 	getCurrentTenant func(
 		ctx context.Context, org string,
 	) (*nico.Tenant, *http.Response, error)
@@ -154,6 +163,33 @@ func (m *mockNicoClient) CreateOrUpdateMachineHealthReport(
 ) (*nico.MachineHealthReportEntry, *http.Response, error) {
 	if m.createOrUpdateMachineHealthReport != nil {
 		return m.createOrUpdateMachineHealthReport(ctx, org, machineId, req)
+	}
+	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) DeleteMachineHealthReport(
+	ctx context.Context, org string, machineId string, source string,
+) (*http.Response, error) {
+	if m.deleteMachineHealthReport != nil {
+		return m.deleteMachineHealthReport(ctx, org, machineId, source)
+	}
+	return &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetMachineValidationRuns(
+	ctx context.Context, org string, machineId string,
+) ([]nico.MachineValidationRun, *http.Response, error) {
+	if m.getMachineValidationRuns != nil {
+		return m.getMachineValidationRuns(ctx, org, machineId)
+	}
+	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetMachineStatusHistory(
+	ctx context.Context, org string, machineId string,
+) ([]nico.StatusDetail, *http.Response, error) {
+	if m.getMachineStatusHistory != nil {
+		return m.getMachineStatusHistory(ctx, org, machineId)
 	}
 	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
@@ -1662,5 +1698,680 @@ func TestCreate_PreFlightHealthCheck_WarningOnlyAllowsCreation(t *testing.T) {
 	err := actuator.Create(context.Background(), machine)
 	if err != nil {
 		t.Fatalf("Create() unexpected error: %v", err)
+	}
+}
+
+// Feature 1: Health report cleanup on recovery
+
+func TestUpdate_HealthReportCleanedOnRecovery(t *testing.T) {
+	instanceID := uuid.New().String()
+	var deletedSource string
+
+	mock := &mockNicoClient{
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
+			inst := testInstance(instanceID)
+			return inst, &http.Response{StatusCode: 200}, nil
+		},
+		getAllMachineHealthReport: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
+			return []nico.MachineHealthReportEntry{}, &http.Response{StatusCode: 200}, nil
+		},
+		deleteMachineHealthReport: func(
+			ctx context.Context, org, machineId, source string,
+		) (*http.Response, error) {
+			deletedSource = source
+			return &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	providerStatus := v1beta1.NicoMachineProviderStatus{
+		InstanceID: &instanceID,
+		Conditions: []metav1.Condition{
+			{
+				Type:   "MachineHealthy",
+				Status: metav1.ConditionFalse,
+				Reason: "CriticalFault",
+			},
+		},
+	}
+	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if deletedSource != "k8s-mhc" {
+		t.Errorf("Expected DeleteMachineHealthReport with source=k8s-mhc, got %q", deletedSource)
+	}
+}
+
+func TestUpdate_HealthReportNotDeletedWhenStayingHealthy(t *testing.T) {
+	instanceID := uuid.New().String()
+	deleteCalled := false
+
+	mock := &mockNicoClient{
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
+			inst := testInstance(instanceID)
+			return inst, &http.Response{StatusCode: 200}, nil
+		},
+		getAllMachineHealthReport: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
+			return []nico.MachineHealthReportEntry{}, &http.Response{StatusCode: 200}, nil
+		},
+		deleteMachineHealthReport: func(
+			ctx context.Context, org, machineId, source string,
+		) (*http.Response, error) {
+			deleteCalled = true
+			return &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	providerStatus := v1beta1.NicoMachineProviderStatus{
+		InstanceID: &instanceID,
+		Conditions: []metav1.Condition{
+			{
+				Type:   "MachineHealthy",
+				Status: metav1.ConditionTrue,
+				Reason: "Healthy",
+			},
+		},
+	}
+	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if deleteCalled {
+		t.Error("DeleteMachineHealthReport should not be called when machine stays healthy")
+	}
+}
+
+// Feature 2: Pre-flight machine validation
+
+func TestCreate_PreFlightValidation_BlocksOnFailure(t *testing.T) {
+	createCalled := false
+	now := time.Now()
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			createCalled = true
+			return testInstance(uuid.New().String()), &http.Response{StatusCode: 201}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
+				Id:     &mid,
+				Health: &nico.MachineHealth{Alerts: []nico.MachineHealthProbeAlert{}},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getMachineValidationRuns: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineValidationRun, *http.Response, error) {
+			endTime := *nico.NewNullableTime(&now)
+			return []nico.MachineValidationRun{
+				{
+					ValidationID: "v1",
+					MachineID:    machineId,
+					StartTime:    now.Add(-10 * time.Minute),
+					EndTime:      endTime,
+					Name:         "hw-validation",
+					Context:      "pre-provision",
+					Status:       nico.MachineValidationStatus{State: "completed", Total: 5, Completed: 3},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Create() expected error when validation has failures")
+	}
+	if createCalled {
+		t.Error("Create() should not have called CreateInstance")
+	}
+}
+
+func TestCreate_PreFlightValidation_SkipsOn403(t *testing.T) {
+	instanceID := uuid.New().String()
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
+				Id:     &mid,
+				Health: &nico.MachineHealth{Alerts: []nico.MachineHealthProbeAlert{}},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getMachineValidationRuns: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineValidationRun, *http.Response, error) {
+			return nil, &http.Response{StatusCode: 403}, fmt.Errorf("forbidden")
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+}
+
+func TestCreate_PreFlightValidation_AllowsOnPass(t *testing.T) {
+	instanceID := uuid.New().String()
+	now := time.Now()
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
+				Id:     &mid,
+				Health: &nico.MachineHealth{Alerts: []nico.MachineHealthProbeAlert{}},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getMachineValidationRuns: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineValidationRun, *http.Response, error) {
+			endTime := *nico.NewNullableTime(&now)
+			return []nico.MachineValidationRun{
+				{
+					ValidationID: "v1",
+					MachineID:    machineId,
+					StartTime:    now.Add(-10 * time.Minute),
+					EndTime:      endTime,
+					Name:         "hw-validation",
+					Context:      "pre-provision",
+					Status:       nico.MachineValidationStatus{State: "completed", Total: 5, Completed: 5},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+}
+
+// Feature 3: Machine status history on stuck provisioning
+
+func TestUpdate_MachineStatusHistory_EmittedWhenStuck(t *testing.T) {
+	instanceID := uuid.New().String()
+	machineStatusHistoryCalled := false
+
+	mock := &mockNicoClient{
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
+			inst := testInstance(instanceID)
+			status := nico.INSTANCESTATUS_PROVISIONING
+			inst.Status = &status
+			return inst, &http.Response{StatusCode: 200}, nil
+		},
+		getInstanceStatusHistory: func(
+			ctx context.Context, org string, id string,
+		) ([]nico.StatusDetail, *http.Response, error) {
+			longAgo := time.Now().Add(-10 * time.Minute)
+			provStr := string(nico.INSTANCESTATUS_PROVISIONING)
+			return []nico.StatusDetail{
+				{Status: &provStr, Created: &longAgo},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getMachineStatusHistory: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.StatusDetail, *http.Response, error) {
+			machineStatusHistoryCalled = true
+			now := time.Now()
+			s1 := "firmware_update"
+			return []nico.StatusDetail{
+				{Status: &s1, Created: &now},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	providerStatus := v1beta1.NicoMachineProviderStatus{
+		InstanceID: &instanceID,
+	}
+	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+	actuator, recorder := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+	if !machineStatusHistoryCalled {
+		t.Error("Expected GetMachineStatusHistory to be called for stuck provisioning")
+	}
+
+	close(recorder.Events)
+	foundMachineHistory := false
+	for event := range recorder.Events {
+		if strings.Contains(event, "MachineStatusHistory") {
+			foundMachineHistory = true
+		}
+	}
+	if !foundMachineHistory {
+		t.Error("Expected MachineStatusHistory event")
+	}
+}
+
+// Coverage: buildInstanceRequest optional fields
+
+func TestBuildInstanceRequest_AllOptionalFields(t *testing.T) {
+	devInstance := int32(2)
+	spec := &v1beta1.NicoMachineProviderSpec{
+		SiteID:         "site-1",
+		TenantID:       "tenant-1",
+		VpcID:          "vpc-1",
+		SubnetID:       "subnet-1",
+		InstanceTypeID: "itype-1",
+		UserData:       "#!/bin/bash\necho hello",
+		OperatingSystemID:     "os-1",
+		SSHKeyGroupIDs:        []string{"sshkg-1", "sshkg-2"},
+		Labels:                map[string]string{"env": "test"},
+		NetworkSecurityGroupID: "nsg-1",
+		Description:           "test instance",
+		AlwaysBootWithCustomIpxe: true,
+		AdditionalSubnetIDs: []v1beta1.AdditionalSubnet{
+			{SubnetID: "subnet-2", IsPhysical: true},
+		},
+		InfiniBandInterfaces: []v1beta1.InfiniBandInterfaceSpec{
+			{PartitionID: "ib-part-1", Device: "mlx5_0", IsPhysical: true, DeviceInstance: &devInstance},
+		},
+		NVLinkInterfaces: []v1beta1.NVLinkInterfaceSpec{
+			{NVLinkLogicalPartitionID: "nvl-part-1", DeviceInstance: &devInstance},
+		},
+	}
+
+	req := buildInstanceRequest("test-machine", spec)
+
+	if req.Name != "test-machine" {
+		t.Errorf("Name = %s, want test-machine", req.Name)
+	}
+	if req.UserData.Get() == nil || *req.UserData.Get() != spec.UserData {
+		t.Error("UserData not set correctly")
+	}
+	if req.OperatingSystemId.Get() == nil || *req.OperatingSystemId.Get() != "os-1" {
+		t.Error("OperatingSystemId not set correctly")
+	}
+	if len(req.SshKeyGroupIds) != 2 {
+		t.Errorf("SshKeyGroupIds count = %d, want 2", len(req.SshKeyGroupIds))
+	}
+	if req.Labels["env"] != "test" {
+		t.Error("Labels not set correctly")
+	}
+	if req.NetworkSecurityGroupId.Get() == nil || *req.NetworkSecurityGroupId.Get() != "nsg-1" {
+		t.Error("NetworkSecurityGroupId not set correctly")
+	}
+	if req.Description.Get() == nil || *req.Description.Get() != "test instance" {
+		t.Error("Description not set correctly")
+	}
+	if req.AlwaysBootWithCustomIpxe == nil || !*req.AlwaysBootWithCustomIpxe {
+		t.Error("AlwaysBootWithCustomIpxe not set")
+	}
+	// 1 primary + 1 additional
+	if len(req.Interfaces) != 2 {
+		t.Errorf("Interfaces count = %d, want 2", len(req.Interfaces))
+	}
+	if len(req.InfinibandInterfaces) != 1 {
+		t.Errorf("InfinibandInterfaces count = %d, want 1", len(req.InfinibandInterfaces))
+	}
+	ib := req.InfinibandInterfaces[0]
+	if ib.PartitionId == nil || *ib.PartitionId != "ib-part-1" {
+		t.Error("IB PartitionId not set")
+	}
+	if ib.Device == nil || *ib.Device != "mlx5_0" {
+		t.Error("IB Device not set")
+	}
+	if ib.IsPhysical == nil || !*ib.IsPhysical {
+		t.Error("IB IsPhysical not set")
+	}
+	if ib.DeviceInstance == nil || *ib.DeviceInstance != 2 {
+		t.Error("IB DeviceInstance not set")
+	}
+	if len(req.NvLinkInterfaces) != 1 {
+		t.Errorf("NvLinkInterfaces count = %d, want 1", len(req.NvLinkInterfaces))
+	}
+	nvl := req.NvLinkInterfaces[0]
+	if nvl.NvLinkLogicalPartitionId == nil || *nvl.NvLinkLogicalPartitionId != "nvl-part-1" {
+		t.Error("NVLink PartitionId not set")
+	}
+	if nvl.DeviceInstance == nil || *nvl.DeviceInstance != 2 {
+		t.Error("NVLink DeviceInstance not set")
+	}
+}
+
+func TestBuildInstanceRequest_FallbackIpxeScript(t *testing.T) {
+	spec := &v1beta1.NicoMachineProviderSpec{
+		SiteID:         "site-1",
+		TenantID:       "tenant-1",
+		VpcID:          "vpc-1",
+		SubnetID:       "subnet-1",
+		InstanceTypeID: "itype-1",
+	}
+
+	req := buildInstanceRequest("test", spec)
+
+	if req.IpxeScript.Get() == nil {
+		t.Fatal("IpxeScript should be set when OperatingSystemID is empty")
+	}
+	if req.OperatingSystemId.Get() != nil {
+		t.Error("OperatingSystemId should not be set")
+	}
+}
+
+func TestBuildInstanceRequest_MachineID(t *testing.T) {
+	spec := &v1beta1.NicoMachineProviderSpec{
+		SiteID:              "site-1",
+		TenantID:            "tenant-1",
+		VpcID:               "vpc-1",
+		SubnetID:            "subnet-1",
+		MachineID:           "machine-1",
+		AllowUnhealthyMachine: true,
+	}
+
+	req := buildInstanceRequest("test", spec)
+
+	if req.MachineId.Get() == nil || *req.MachineId.Get() != "machine-1" {
+		t.Error("MachineId not set correctly")
+	}
+	if req.AllowUnhealthyMachine == nil || !*req.AllowUnhealthyMachine {
+		t.Error("AllowUnhealthyMachine not set")
+	}
+	if req.InstanceTypeId.Get() != nil {
+		t.Error("InstanceTypeId should not be set when MachineID is used")
+	}
+}
+
+// Coverage: getNicoClient secret validation
+
+func TestGetNicoClient_MissingEndpoint(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = machinev1beta1.AddToScheme(scheme)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "nico-creds", Namespace: "default"},
+		Data: map[string][]byte{
+			"orgName": []byte("org"),
+			"token":   []byte("tok"),
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+	actuator := &Actuator{client: fakeClient}
+
+	spec := &v1beta1.NicoMachineProviderSpec{
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "nico-creds", Namespace: "default"},
+	}
+	_, _, err := actuator.getNicoClient(context.Background(), spec)
+	if err == nil {
+		t.Fatal("Expected error for missing endpoint")
+	}
+	if !strings.Contains(err.Error(), "endpoint") {
+		t.Errorf("Expected error about 'endpoint', got: %v", err)
+	}
+}
+
+func TestGetNicoClient_MissingOrgName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = machinev1beta1.AddToScheme(scheme)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "nico-creds", Namespace: "default"},
+		Data: map[string][]byte{
+			"endpoint": []byte("https://api.test"),
+			"token":    []byte("tok"),
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+	actuator := &Actuator{client: fakeClient}
+
+	spec := &v1beta1.NicoMachineProviderSpec{
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "nico-creds", Namespace: "default"},
+	}
+	_, _, err := actuator.getNicoClient(context.Background(), spec)
+	if err == nil {
+		t.Fatal("Expected error for missing orgName")
+	}
+}
+
+func TestGetNicoClient_MissingToken(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = machinev1beta1.AddToScheme(scheme)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "nico-creds", Namespace: "default"},
+		Data: map[string][]byte{
+			"endpoint": []byte("https://api.test"),
+			"orgName":  []byte("org"),
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+	actuator := &Actuator{client: fakeClient}
+
+	spec := &v1beta1.NicoMachineProviderSpec{
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "nico-creds", Namespace: "default"},
+	}
+	_, _, err := actuator.getNicoClient(context.Background(), spec)
+	if err == nil {
+		t.Fatal("Expected error for missing token")
+	}
+}
+
+func TestGetNicoClient_SecretNotFound(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = machinev1beta1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	actuator := &Actuator{client: fakeClient}
+
+	spec := &v1beta1.NicoMachineProviderSpec{
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "missing", Namespace: "default"},
+	}
+	_, _, err := actuator.getNicoClient(context.Background(), spec)
+	if err == nil {
+		t.Fatal("Expected error for missing secret")
+	}
+}
+
+func TestGetNicoClient_Success(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = machinev1beta1.AddToScheme(scheme)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "nico-creds", Namespace: "default"},
+		Data: map[string][]byte{
+			"endpoint": []byte("https://api.test"),
+			"orgName":  []byte("test-org"),
+			"token":    []byte("test-token"),
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+	actuator := &Actuator{client: fakeClient}
+
+	spec := &v1beta1.NicoMachineProviderSpec{
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "nico-creds", Namespace: "default"},
+	}
+	client, orgName, err := actuator.getNicoClient(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if client == nil {
+		t.Fatal("Expected non-nil client")
+	}
+	if orgName != "test-org" {
+		t.Errorf("Expected orgName=test-org, got %s", orgName)
+	}
+}
+
+// Coverage: checkMachineValidation edge cases
+
+func TestCreate_PreFlightValidation_BlocksOnInProgressRun(t *testing.T) {
+	createCalled := false
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			createCalled = true
+			return testInstance(uuid.New().String()), &http.Response{StatusCode: 201}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
+				Id:     &mid,
+				Health: &nico.MachineHealth{Alerts: []nico.MachineHealthProbeAlert{}},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getMachineValidationRuns: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineValidationRun, *http.Response, error) {
+			return []nico.MachineValidationRun{
+				{
+					ValidationID: "v1",
+					MachineID:    machineId,
+					StartTime:    time.Now().Add(-2 * time.Minute),
+					Name:         "hw-validation",
+					Context:      "pre-provision",
+					Status:       nico.MachineValidationStatus{State: "running", Total: 5, Completed: 2},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Create() expected error when validation run is in progress")
+	}
+	if createCalled {
+		t.Error("Create() should not have called CreateInstance")
+	}
+}
+
+func TestCreate_PreFlightValidation_PicksLatestRun(t *testing.T) {
+	instanceID := uuid.New().String()
+	now := time.Now()
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
+				Id:     &mid,
+				Health: &nico.MachineHealth{Alerts: []nico.MachineHealthProbeAlert{}},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getMachineValidationRuns: func(
+			ctx context.Context, org, machineId string,
+		) ([]nico.MachineValidationRun, *http.Response, error) {
+			oldTime := now.Add(-1 * time.Hour)
+			oldEnd := *nico.NewNullableTime(&oldTime)
+			newEnd := *nico.NewNullableTime(&now)
+			return []nico.MachineValidationRun{
+				{
+					ValidationID: "v-old",
+					MachineID:    machineId,
+					StartTime:    oldTime.Add(-10 * time.Minute),
+					EndTime:      oldEnd,
+					Name:         "old-run",
+					Context:      "pre-provision",
+					Status:       nico.MachineValidationStatus{State: "completed", Total: 5, Completed: 3},
+				},
+				{
+					ValidationID: "v-new",
+					MachineID:    machineId,
+					StartTime:    now.Add(-10 * time.Minute),
+					EndTime:      newEnd,
+					Name:         "new-run",
+					Context:      "pre-provision",
+					Status:       nico.MachineValidationStatus{State: "completed", Total: 5, Completed: 5},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Create() unexpected error (latest run passed): %v", err)
+	}
+}
+
+// Coverage: deployDpuExtensionServices error path
+
+func TestCreate_DpuExtensionServices_ErrorPath(t *testing.T) {
+	instanceID := uuid.New().String()
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+		updateInstance: func(
+			ctx context.Context, org string, id string,
+			req nico.InstanceUpdateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return nil, &http.Response{StatusCode: 500}, fmt.Errorf("internal server error")
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.DpuExtensionServices = []v1beta1.DpuExtensionServiceSpec{
+		{ServiceID: "svc-1", Version: "1.0.0"},
+	}
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Create() expected error when DPU deployment fails")
+	}
+	if !strings.Contains(err.Error(), "DPU extension services") {
+		t.Errorf("Expected error about DPU extension services, got: %v", err)
 	}
 }

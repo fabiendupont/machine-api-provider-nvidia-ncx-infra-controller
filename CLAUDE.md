@@ -149,6 +149,38 @@ Unit tests cover:
   skipped for instanceTypeId, skipped for AllowUnhealthy,
   uses HealthReport API, warning-only allows creation,
   FailureReason after max attempts)
+- Health report cleanup on unhealthy→healthy transition
+  (deletes k8s-mhc source, not deleted when staying healthy)
+- Pre-flight machine validation (blocks on failure,
+  skips on 403, allows on pass)
+- Machine status history emitted when provisioning stuck
+  with machineId assigned
+
+### ~~9. Health report cleanup on recovery~~ (DONE)
+
+When MHC remediation creates a `k8s-mhc` health report via
+`CreateOrUpdateMachineHealthReport`, it persists on the machine.
+On unhealthy→healthy transition in `updateMachineHealthFromReports`,
+calls `DeleteMachineHealthReport(org, machineId, "k8s-mhc")`.
+Non-fatal — ignores errors/404. Only in the HealthReport API
+path (not JSONB fallback).
+
+### ~~10. Pre-flight machine validation~~ (DONE)
+
+For targeted provisioning (`machineId`), queries
+`GetAllMachineValidationRuns` for the most recent validation run.
+Blocks creation if the latest run state != "completed" or has
+failures (completed < total). Degrades gracefully on 403/404
+(skips silently — API requires PROVIDER_ADMIN). No spec field
+needed — zero-config alongside health checks.
+
+### ~~11. Machine status history on stuck provisioning~~ (DONE)
+
+When an instance is stuck in Provisioning >5min and has a
+physical machineId assigned, fetches `GetMachineStatusHistory`
+and emits `MachineStatusHistory` Warning events. Surfaces
+physical-layer issues (firmware updates, PXE failures, BMC
+resets) that instance status history doesn't show. Non-fatal.
 
 ## Design constraints
 

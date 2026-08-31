@@ -74,6 +74,15 @@ type NicoClientInterface interface {
 		ctx context.Context, org string, machineId string,
 		req nico.MachineHealthReportEntryRequest,
 	) (*nico.MachineHealthReportEntry, *http.Response, error)
+	DeleteMachineHealthReport(
+		ctx context.Context, org string, machineId string, source string,
+	) (*http.Response, error)
+	GetMachineValidationRuns(
+		ctx context.Context, org string, machineId string,
+	) ([]nico.MachineValidationRun, *http.Response, error)
+	GetMachineStatusHistory(
+		ctx context.Context, org string, machineId string,
+	) ([]nico.StatusDetail, *http.Response, error)
 }
 
 // nicoClient wraps the SDK APIClient and injects auth context
@@ -150,6 +159,24 @@ func (c *nicoClient) CreateOrUpdateMachineHealthReport(
 	return c.client.HealthReportAPI.CreateOrUpdateMachineHealthReport(
 		c.authCtx(ctx), org, machineId,
 	).MachineHealthReportEntryRequest(req).Execute()
+}
+
+func (c *nicoClient) DeleteMachineHealthReport(
+	ctx context.Context, org, machineId, source string,
+) (*http.Response, error) {
+	return c.client.HealthReportAPI.DeleteMachineHealthReport(c.authCtx(ctx), org, machineId, source).Execute()
+}
+
+func (c *nicoClient) GetMachineValidationRuns(
+	ctx context.Context, org, machineId string,
+) ([]nico.MachineValidationRun, *http.Response, error) {
+	return c.client.MachineValidationAPI.GetAllMachineValidationRuns(c.authCtx(ctx), org, machineId).Execute()
+}
+
+func (c *nicoClient) GetMachineStatusHistory(
+	ctx context.Context, org, machineId string,
+) ([]nico.StatusDetail, *http.Response, error) {
+	return c.client.MachineAPI.GetMachineStatusHistory(c.authCtx(ctx), org, machineId).Execute()
 }
 
 const (
@@ -1121,6 +1148,11 @@ func (a *Actuator) checkStatusHistory(
 		}
 		a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "ProvisioningStuck",
 			"Instance has been in Provisioning state for more than %s", provisioningStuckThreshold)
+
+		// Also fetch physical machine status history if a machine is assigned
+		if machineID, ok := instance.GetMachineIdOk(); ok && machineID != nil && *machineID != "" {
+			a.emitMachineStatusHistory(ctx, nicoAPIClient, orgName, machineObj, *machineID)
+		}
 	}
 
 	// Record status transitions as Warning events for debugging
@@ -1143,6 +1175,45 @@ func (a *Actuator) checkStatusHistory(
 		} else {
 			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "StatusHistory",
 				"[%s] %s", ts, status)
+		}
+	}
+}
+
+// emitMachineStatusHistory fetches physical machine status transitions and
+// records them as MachineStatusHistory Warning events for debugging. Non-fatal.
+func (a *Actuator) emitMachineStatusHistory(
+	ctx context.Context,
+	nicoAPIClient NicoClientInterface,
+	orgName string,
+	machineObj client.Object,
+	machineID string,
+) {
+	if a.eventRecorder == nil {
+		return
+	}
+	history, httpResp, err := nicoAPIClient.GetMachineStatusHistory(ctx, orgName, machineID)
+	if err != nil || httpResp == nil || httpResp.StatusCode != http.StatusOK || len(history) == 0 {
+		return
+	}
+	for _, entry := range history {
+		status := "unknown"
+		if entry.Status != nil {
+			status = *entry.Status
+		}
+		msg := ""
+		if entry.Message.Get() != nil {
+			msg = *entry.Message.Get()
+		}
+		ts := ""
+		if entry.Created != nil {
+			ts = entry.Created.Format(time.RFC3339)
+		}
+		if msg != "" {
+			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "MachineStatusHistory",
+				"[%s] machine %s: %s: %s", ts, machineID, status, msg)
+		} else {
+			a.eventRecorder.Eventf(machineObj, corev1.EventTypeWarning, "MachineStatusHistory",
+				"[%s] machine %s: %s", ts, machineID, status)
 		}
 	}
 }
@@ -1219,7 +1290,11 @@ func (a *Actuator) checkPreFlightHealth(
 ) (bool, error) {
 	hasCritical, alertMsg := a.checkCriticalFaults(ctx, nicoAPIClient, orgName, providerSpec.MachineID)
 	if !hasCritical {
-		return false, nil
+		hasValidationFailure, validationMsg := a.checkMachineValidation(ctx, nicoAPIClient, orgName, providerSpec.MachineID)
+		if !hasValidationFailure {
+			return false, nil
+		}
+		alertMsg = validationMsg
 	}
 
 	// Read existing provider status to track attempt count
@@ -1343,6 +1418,39 @@ func (a *Actuator) checkCriticalFaults(
 	return true, alertMsg
 }
 
+// checkMachineValidation queries the most recent machine validation run.
+// Returns (true, message) if the latest run has failures, (false, "") if
+// validation passed or the API is unavailable.
+func (a *Actuator) checkMachineValidation(
+	ctx context.Context,
+	nicoAPIClient NicoClientInterface,
+	orgName string,
+	machineID string,
+) (bool, string) {
+	runs, httpResp, err := nicoAPIClient.GetMachineValidationRuns(ctx, orgName, machineID)
+	if err != nil || httpResp == nil || httpResp.StatusCode >= 300 || len(runs) == 0 {
+		return false, ""
+	}
+
+	// Find the most recent run by EndTime
+	latest := runs[0]
+	for _, r := range runs[1:] {
+		if r.EndTime.Get() != nil && (latest.EndTime.Get() == nil || r.EndTime.Get().After(*latest.EndTime.Get())) {
+			latest = r
+		}
+	}
+
+	state := latest.Status.State
+	if state != "completed" {
+		return true, fmt.Sprintf("Machine %s has a validation run in state %q", machineID, state)
+	}
+	if latest.Status.Completed < latest.Status.Total {
+		return true, fmt.Sprintf("Machine %s validation: %d/%d tests passed",
+			machineID, latest.Status.Completed, latest.Status.Total)
+	}
+	return false, ""
+}
+
 // classifyAlerts splits alerts into critical and warning based on their
 // Classifications field. An alert is critical if any classification contains
 // "critical"; warning if any classification contains "warning". Alerts with
@@ -1415,7 +1523,7 @@ func (a *Actuator) updateMachineHealth(
 	wasUnhealthy := isConditionFalse(providerStatus, "MachineHealthy")
 
 	// Try HealthReport API first, fall back to JSONB
-	if a.updateMachineHealthFromReports(ctx, nicoAPIClient, orgName, *machineID, providerStatus) {
+	if a.updateMachineHealthFromReports(ctx, nicoAPIClient, orgName, *machineID, providerStatus, wasUnhealthy) {
 		trackUnhealthyGauge(wasUnhealthy, providerStatus)
 		return
 	}
@@ -1455,12 +1563,15 @@ func trackUnhealthyGauge(
 // updateMachineHealthFromReports queries GetAllMachineHealthReport for health
 // reports on the machine. Returns true if the API was available (even if no
 // alerts), false if the API is unavailable and the caller should fall back.
+// When the machine transitions from unhealthy to healthy, cleans up any
+// k8s-mhc health report we previously created.
 func (a *Actuator) updateMachineHealthFromReports(
 	ctx context.Context,
 	nicoAPIClient NicoClientInterface,
 	orgName string,
 	machineID string,
 	providerStatus *v1beta1.NicoMachineProviderStatus,
+	wasUnhealthy bool,
 ) bool {
 	reports, httpResp, err := nicoAPIClient.GetAllMachineHealthReport(ctx, orgName, machineID)
 	if err != nil || httpResp == nil || httpResp.StatusCode >= 300 {
@@ -1481,8 +1592,7 @@ func (a *Actuator) updateMachineHealthFromReports(
 		}
 		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionFalse,
 			"NoRemediation", "No active fault remediation")
-		return true
-	}
+	} else {
 
 	critical, warning := classifyAlerts(allAlerts)
 
@@ -1517,6 +1627,20 @@ func (a *Actuator) updateMachineHealthFromReports(
 	} else {
 		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionFalse,
 			"NoRemediation", "No active fault remediation")
+	}
+
+	} // end else (has alerts)
+
+	// Clean up k8s-mhc health report on unhealthy→healthy transition
+	isUnhealthy := isConditionFalse(providerStatus, "MachineHealthy")
+	if wasUnhealthy && !isUnhealthy {
+		resp, delErr := nicoAPIClient.DeleteMachineHealthReport(ctx, orgName, machineID, "k8s-mhc")
+		if delErr == nil && resp != nil && resp.StatusCode < 300 {
+			if a.eventRecorder != nil {
+				a.eventRecorder.Eventf(nil, corev1.EventTypeNormal, "MHCHealthReportCleared",
+					"Cleared k8s-mhc health report for machine %s after recovery", machineID)
+			}
+		}
 	}
 
 	return true
