@@ -219,6 +219,12 @@ func (m *mockNicoClient) GetMachineStatusHistory(
 	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
 }
 
+func (m *mockNicoClient) GetAllTenantAccount(
+	ctx context.Context, org string,
+) ([]nico.TenantAccount, *http.Response, error) {
+	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
+}
+
 var _ = Describe("Machine Actuator Integration", func() {
 	var (
 		namespace *corev1.Namespace

@@ -86,6 +86,9 @@ type mockNicoClient struct {
 	getMachineStatusHistory func(
 		ctx context.Context, org string, machineId string,
 	) ([]nico.StatusDetail, *http.Response, error)
+	getAllTenantAccount func(
+		ctx context.Context, org string,
+	) ([]nico.TenantAccount, *http.Response, error)
 	getCurrentTenant func(
 		ctx context.Context, org string,
 	) (*nico.Tenant, *http.Response, error)
@@ -190,6 +193,15 @@ func (m *mockNicoClient) GetMachineStatusHistory(
 ) ([]nico.StatusDetail, *http.Response, error) {
 	if m.getMachineStatusHistory != nil {
 		return m.getMachineStatusHistory(ctx, org, machineId)
+	}
+	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetAllTenantAccount(
+	ctx context.Context, org string,
+) ([]nico.TenantAccount, *http.Response, error) {
+	if m.getAllTenantAccount != nil {
+		return m.getAllTenantAccount(ctx, org)
 	}
 	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
@@ -2373,5 +2385,161 @@ func TestCreate_DpuExtensionServices_ErrorPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "DPU extension services") {
 		t.Errorf("Expected error about DPU extension services, got: %v", err)
+	}
+}
+
+// TenantAccountAPI: targeted instance creation capability
+
+func TestCreate_TargetedCreation_EnabledViaTenantAccount(t *testing.T) {
+	instanceID := uuid.New().String()
+	siteID := "550e8400-e29b-41d4-a716-446655440000"
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
+				Id:     &mid,
+				Health: &nico.MachineHealth{Alerts: []nico.MachineHealthProbeAlert{}},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getAllTenantAccount: func(ctx context.Context, org string) ([]nico.TenantAccount, *http.Response, error) {
+			status := nico.TENANTACCOUNTSTATUS_READY
+			return []nico.TenantAccount{
+				{
+					Status: &status,
+					SiteCapabilities: []nico.TenantAccountSiteCapability{
+						{SiteIds: []string{siteID}, TargetedInstanceCreation: true},
+					},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+	spec.SiteID = siteID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+}
+
+func TestCreate_TargetedCreation_DisabledViaTenantAccount(t *testing.T) {
+	siteID := "550e8400-e29b-41d4-a716-446655440000"
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return nil, nil, fmt.Errorf("should not be called")
+		},
+		getAllTenantAccount: func(ctx context.Context, org string) ([]nico.TenantAccount, *http.Response, error) {
+			status := nico.TENANTACCOUNTSTATUS_READY
+			return []nico.TenantAccount{
+				{
+					Status: &status,
+					SiteCapabilities: []nico.TenantAccountSiteCapability{
+						{SiteIds: []string{siteID}, TargetedInstanceCreation: false},
+					},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+	spec.SiteID = siteID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err == nil {
+		t.Fatal("Create() expected error when targeted creation is disabled")
+	}
+	if !strings.Contains(err.Error(), "targeted instance creation") {
+		t.Errorf("Expected error about targeted instance creation, got: %v", err)
+	}
+}
+
+func TestCreate_TargetedCreation_DefaultCapability(t *testing.T) {
+	instanceID := uuid.New().String()
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
+				Id:     &mid,
+				Health: &nico.MachineHealth{Alerts: []nico.MachineHealthProbeAlert{}},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getAllTenantAccount: func(ctx context.Context, org string) ([]nico.TenantAccount, *http.Response, error) {
+			status := nico.TENANTACCOUNTSTATUS_READY
+			return []nico.TenantAccount{
+				{
+					Status: &status,
+					SiteCapabilities: []nico.TenantAccountSiteCapability{
+						{TargetedInstanceCreation: true},
+					},
+				},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+}
+
+func TestCreate_TargetedCreation_FallsBackToTenantAPI(t *testing.T) {
+	instanceID := uuid.New().String()
+	mock := &mockNicoClient{
+		createInstance: func(
+			ctx context.Context, org string, req nico.InstanceCreateRequest,
+		) (*nico.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 201}, nil
+		},
+		getMachine: func(ctx context.Context, org string, mid string) (*nico.Machine, *http.Response, error) {
+			return &nico.Machine{
+				Id:     &mid,
+				Health: &nico.MachineHealth{Alerts: []nico.MachineHealthProbeAlert{}},
+			}, &http.Response{StatusCode: 200}, nil
+		},
+		getCurrentTenant: func(ctx context.Context, org string) (*nico.Tenant, *http.Response, error) {
+			caps := &nico.TenantCapabilities{}
+			caps.SetTargetedInstanceCreation(true)
+			return &nico.Tenant{Capabilities: caps}, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	spec := validProviderSpec()
+	spec.InstanceTypeID = ""
+	spec.MachineID = testTargetMachineID
+
+	machine := createTypedTestMachine(spec)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Create(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
 	}
 }

@@ -182,6 +182,16 @@ and emits `MachineStatusHistory` Warning events. Surfaces
 physical-layer issues (firmware updates, PXE failures, BMC
 resets) that instance status history doesn't show. Non-fatal.
 
+### ~~12. TenantAccount-based capability check~~ (DONE)
+
+Targeted instance creation capability check migrated from the
+deprecated `TenantCapabilities.TargetedInstanceCreation` on
+`GetCurrentTenant` to the `TenantAccountAPI`. Queries
+`GetAllTenantAccount`, finds Ready accounts, checks
+`SiteCapabilities` for the target site. Empty `SiteIds`
+means default (applies to all sites). Falls back to
+`GetCurrentTenant` if TenantAccount API is unavailable.
+
 ## Design constraints
 
 - Health features try HealthReport API first, fall back to

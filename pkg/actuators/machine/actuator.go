@@ -83,6 +83,9 @@ type NicoClientInterface interface {
 	GetMachineStatusHistory(
 		ctx context.Context, org string, machineId string,
 	) ([]nico.StatusDetail, *http.Response, error)
+	GetAllTenantAccount(
+		ctx context.Context, org string,
+	) ([]nico.TenantAccount, *http.Response, error)
 }
 
 // nicoClient wraps the SDK APIClient and injects auth context
@@ -177,6 +180,12 @@ func (c *nicoClient) GetMachineStatusHistory(
 	ctx context.Context, org, machineId string,
 ) ([]nico.StatusDetail, *http.Response, error) {
 	return c.client.MachineAPI.GetMachineStatusHistory(c.authCtx(ctx), org, machineId).Execute()
+}
+
+func (c *nicoClient) GetAllTenantAccount(
+	ctx context.Context, org string,
+) ([]nico.TenantAccount, *http.Response, error) {
+	return c.client.TenantAccountAPI.GetAllTenantAccount(c.authCtx(ctx), org).Execute()
 }
 
 const (
@@ -408,11 +417,8 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 
 	// Validate tenant capabilities for targeted provisioning
 	if providerSpec.MachineID != "" {
-		tenant, _, tenantErr := nicoAPIClient.GetCurrentTenant(ctx, orgName)
-		if tenantErr == nil && tenant != nil && tenant.Capabilities != nil {
-			if tenant.Capabilities.TargetedInstanceCreation != nil && !*tenant.Capabilities.TargetedInstanceCreation {
-				return fmt.Errorf("tenant does not have targeted instance creation enabled; cannot use machineId")
-			}
+		if !a.hasTargetedInstanceCreation(ctx, nicoAPIClient, orgName, providerSpec.SiteID) {
+			return fmt.Errorf("tenant does not have targeted instance creation enabled; cannot use machineId")
 		}
 	}
 
@@ -1258,6 +1264,50 @@ func (a *Actuator) checkProvisioningTimeout(
 			break
 		}
 	}
+}
+
+// hasTargetedInstanceCreation checks if the tenant has targeted instance
+// creation enabled for the given site. Tries the TenantAccount API first
+// (checks SiteCapabilities), falls back to the deprecated
+// TenantCapabilities on GetCurrentTenant.
+func (a *Actuator) hasTargetedInstanceCreation(
+	ctx context.Context,
+	nicoAPIClient NicoClientInterface,
+	orgName string,
+	siteID string,
+) bool {
+	accounts, httpResp, err := nicoAPIClient.GetAllTenantAccount(ctx, orgName)
+	if err == nil && httpResp != nil && httpResp.StatusCode < 300 {
+		for _, acct := range accounts {
+			if acct.GetStatus() != nico.TENANTACCOUNTSTATUS_READY {
+				continue
+			}
+			for _, cap := range acct.SiteCapabilities {
+				if !cap.TargetedInstanceCreation {
+					continue
+				}
+				if len(cap.SiteIds) == 0 {
+					return true
+				}
+				for _, id := range cap.SiteIds {
+					if id == siteID {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
+	// Fall back to deprecated TenantCapabilities
+	tenant, _, tenantErr := nicoAPIClient.GetCurrentTenant(ctx, orgName)
+	if tenantErr != nil || tenant == nil || tenant.Capabilities == nil {
+		return true
+	}
+	if tenant.Capabilities.TargetedInstanceCreation != nil {
+		return *tenant.Capabilities.TargetedInstanceCreation
+	}
+	return true
 }
 
 // isMHCRemediation detects if the Machine deletion was triggered by
