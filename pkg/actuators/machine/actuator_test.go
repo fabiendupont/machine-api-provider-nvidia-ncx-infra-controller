@@ -46,6 +46,13 @@ const (
 	testInstanceID      = "test-instance-id"
 	testMachineID       = "machine-123"
 	testTargetMachineID = "target-machine-id"
+	testMachineName     = "test-machine"
+	testNamespace       = "default"
+	testCredsSecret     = "nico-creds"
+	testAlertID         = "alert-1"
+	testSiteID          = "550e8400-e29b-41d4-a716-446655440000"
+	testHealthSource    = "hardware-monitor"
+	mhcAnnotation       = "machine.openshift.io/unhealthy"
 )
 
 // mockNicoClient implements NicoClientInterface for testing
@@ -254,14 +261,14 @@ func testInstance(id string) *nico.Instance {
 
 func validProviderSpec() v1beta1.NicoMachineProviderSpec {
 	return v1beta1.NicoMachineProviderSpec{
-		SiteID:         "550e8400-e29b-41d4-a716-446655440000",
+		SiteID:         testSiteID,
 		TenantID:       "660e8400-e29b-41d4-a716-446655440001",
 		InstanceTypeID: "990e8400-e29b-41d4-a716-446655440004",
 		VpcID:          "770e8400-e29b-41d4-a716-446655440002",
 		SubnetID:       "880e8400-e29b-41d4-a716-446655440003",
 		CredentialsSecret: v1beta1.CredentialsSecretReference{
-			Name:      "nico-creds",
-			Namespace: "default",
+			Name:      testCredsSecret,
+			Namespace: testNamespace,
 		},
 	}
 }
@@ -270,8 +277,8 @@ func createTypedTestMachine(providerSpec v1beta1.NicoMachineProviderSpec) *machi
 	specBytes, _ := json.Marshal(providerSpec)
 	return &machinev1beta1.Machine{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-machine",
-			Namespace: "default",
+			Name:      testMachineName,
+			Namespace: testNamespace,
 		},
 		Spec: machinev1beta1.MachineSpec{
 			ProviderSpec: machinev1beta1.ProviderSpec{
@@ -288,8 +295,8 @@ func createTestMachine(providerSpec v1beta1.NicoMachineProviderSpec) *unstructur
 		Version: "v1beta1",
 		Kind:    "Machine",
 	})
-	machine.SetName("test-machine")
-	machine.SetNamespace("default")
+	machine.SetName(testMachineName)
+	machine.SetNamespace(testNamespace)
 
 	providerSpecMap, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(&providerSpec)
 	_ = unstructured.SetNestedField(machine.Object, providerSpecMap, "spec", "providerSpec", "value")
@@ -674,7 +681,7 @@ func TestUpdate_HealthIntegration(t *testing.T) {
 				Id: &machineID,
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
-						{Id: "alert-1", Message: "unknown issue"},
+						{Id: testAlertID, Message: "unknown issue"},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -732,8 +739,8 @@ func createTypedTestMachineWithStatus(
 	statusBytes, _ := json.Marshal(providerStatus)
 	return &machinev1beta1.Machine{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-machine",
-			Namespace: "default",
+			Name:      testMachineName,
+			Namespace: testNamespace,
 		},
 		Spec: machinev1beta1.MachineSpec{
 			ProviderSpec: machinev1beta1.ProviderSpec{
@@ -765,7 +772,7 @@ func TestDelete_MHCRemediation(t *testing.T) {
 	})
 	// Set the MHC remediation annotation
 	machine.SetAnnotations(map[string]string{
-		"machine.openshift.io/unhealthy": "",
+		mhcAnnotation: "",
 	})
 
 	err := actuator.Delete(context.Background(), machine)
@@ -1159,7 +1166,7 @@ func TestUpdate_HealthClassification_Critical(t *testing.T) {
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
-							Id:              "alert-1",
+							Id:              testAlertID,
 							Message:         "GPU memory ECC error",
 							Classifications: []string{severityCritical},
 						},
@@ -1193,7 +1200,7 @@ func TestUpdate_HealthClassification_WarningOnly(t *testing.T) {
 				Id: &machineID,
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
-						{Id: "alert-1", Message: "minor", Classifications: []string{severityWarning}},
+						{Id: testAlertID, Message: "minor", Classifications: []string{severityWarning}},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -1225,7 +1232,7 @@ func TestUpdate_NicoFaultRemediation(t *testing.T) {
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
-							Id:              "alert-1",
+							Id:              testAlertID,
 							Message:         "GPU reset in progress",
 							Classifications: []string{severityCritical, severityRemediating},
 						},
@@ -1263,7 +1270,7 @@ func TestDelete_MHCRemediation_EnrichedDetails(t *testing.T) {
 		InstanceID: &instanceID,
 	})
 	machine.SetAnnotations(map[string]string{
-		"machine.openshift.io/unhealthy": "",
+		mhcAnnotation: "",
 	})
 
 	err := actuator.Delete(context.Background(), machine)
@@ -1279,7 +1286,7 @@ func TestDelete_MHCRemediation_EnrichedDetails(t *testing.T) {
 	if summaryPtr == nil {
 		t.Fatal("Expected Summary to be set")
 	}
-	if !strings.Contains(*summaryPtr, "test-machine") {
+	if !strings.Contains(*summaryPtr, testMachineName) {
 		t.Errorf("Expected summary to contain machine name, got: %s", *summaryPtr)
 	}
 
@@ -1311,7 +1318,7 @@ func TestCreate_PreFlightHealthCheck_BlocksCreation(t *testing.T) {
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
-							Id:              "alert-1",
+							Id:              testAlertID,
 							Message:         "GPU memory ECC error",
 							Classifications: []string{severityCritical},
 						},
@@ -1460,7 +1467,7 @@ func TestCreate_PreFlightHealthCheck_FailureReasonAfterMaxAttempts(t *testing.T)
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
 						{
-							Id:              "alert-1",
+							Id:              testAlertID,
 							Message:         "Persistent GPU fault",
 							Classifications: []string{severityCritical},
 						},
@@ -1510,10 +1517,10 @@ func TestUpdate_HealthFromHealthReportAPI(t *testing.T) {
 		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
 			return []nico.MachineHealthReportEntry{
 				{
-					Source: "hardware-monitor",
+					Source: testHealthSource,
 					Mode:   "replace",
 					Alerts: []nico.MachineHealthProbeAlert{
-						{Id: "alert-1", Message: "GPU ECC uncorrectable error", Classifications: []string{severityCritical}},
+						{Id: testAlertID, Message: "GPU ECC uncorrectable error", Classifications: []string{severityCritical}},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -1543,10 +1550,13 @@ func TestUpdate_HealthFromHealthReportAPI_Remediating(t *testing.T) {
 		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
 			return []nico.MachineHealthReportEntry{
 				{
-					Source: "hardware-monitor",
+					Source: testHealthSource,
 					Mode:   "replace",
 					Alerts: []nico.MachineHealthProbeAlert{
-						{Id: "alert-1", Message: "GPU reset in progress", Classifications: []string{severityCritical, severityRemediating}},
+						{
+							Id: testAlertID, Message: "GPU reset in progress",
+							Classifications: []string{severityCritical, severityRemediating},
+						},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -1616,7 +1626,7 @@ func TestDelete_MHCRemediation_ReportsHealthIssue(t *testing.T) {
 		MachineID:  &machineID,
 	})
 	machine.SetAnnotations(map[string]string{
-		"machine.openshift.io/unhealthy": "",
+		mhcAnnotation: "",
 	})
 
 	err := actuator.Delete(context.Background(), machine)
@@ -1635,7 +1645,7 @@ func TestDelete_MHCRemediation_ReportsHealthIssue(t *testing.T) {
 	if len(capturedReq.Alerts) == 0 {
 		t.Fatal("Expected at least one alert in health report request")
 	}
-	if !strings.Contains(capturedReq.Alerts[0].Message, "test-machine") {
+	if !strings.Contains(capturedReq.Alerts[0].Message, testMachineName) {
 		t.Errorf("Expected alert message to contain machine name, got: %s", capturedReq.Alerts[0].Message)
 	}
 }
@@ -1654,10 +1664,10 @@ func TestCreate_PreFlightHealthCheck_UsesHealthReportAPI(t *testing.T) {
 		) ([]nico.MachineHealthReportEntry, *http.Response, error) {
 			return []nico.MachineHealthReportEntry{
 				{
-					Source: "hardware-monitor",
+					Source: testHealthSource,
 					Mode:   "replace",
 					Alerts: []nico.MachineHealthProbeAlert{
-						{Id: "alert-1", Message: "Persistent GPU fault", Classifications: []string{severityCritical}},
+						{Id: testAlertID, Message: "Persistent GPU fault", Classifications: []string{severityCritical}},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -1693,7 +1703,7 @@ func TestCreate_PreFlightHealthCheck_WarningOnlyAllowsCreation(t *testing.T) {
 				Id: &mid,
 				Health: &nico.MachineHealth{
 					Alerts: []nico.MachineHealthProbeAlert{
-						{Id: "alert-1", Message: "minor", Classifications: []string{severityWarning}},
+						{Id: testAlertID, Message: "minor", Classifications: []string{severityWarning}},
 					},
 				},
 			}, &http.Response{StatusCode: 200}, nil
@@ -2000,17 +2010,17 @@ func TestUpdate_MachineStatusHistory_EmittedWhenStuck(t *testing.T) {
 func TestBuildInstanceRequest_AllOptionalFields(t *testing.T) {
 	devInstance := int32(2)
 	spec := &v1beta1.NicoMachineProviderSpec{
-		SiteID:         "site-1",
-		TenantID:       "tenant-1",
-		VpcID:          "vpc-1",
-		SubnetID:       "subnet-1",
-		InstanceTypeID: "itype-1",
-		UserData:       "#!/bin/bash\necho hello",
-		OperatingSystemID:     "os-1",
-		SSHKeyGroupIDs:        []string{"sshkg-1", "sshkg-2"},
-		Labels:                map[string]string{"env": "test"},
-		NetworkSecurityGroupID: "nsg-1",
-		Description:           "test instance",
+		SiteID:                   "site-1",
+		TenantID:                 "tenant-1",
+		VpcID:                    "vpc-1",
+		SubnetID:                 "subnet-1",
+		InstanceTypeID:           "itype-1",
+		UserData:                 "#!/bin/bash\necho hello",
+		OperatingSystemID:        "os-1",
+		SSHKeyGroupIDs:           []string{"sshkg-1", "sshkg-2"},
+		Labels:                   map[string]string{"env": "test"},
+		NetworkSecurityGroupID:   "nsg-1",
+		Description:              "test instance",
 		AlwaysBootWithCustomIpxe: true,
 		AdditionalSubnetIDs: []v1beta1.AdditionalSubnet{
 			{SubnetID: "subnet-2", IsPhysical: true},
@@ -2023,9 +2033,9 @@ func TestBuildInstanceRequest_AllOptionalFields(t *testing.T) {
 		},
 	}
 
-	req := buildInstanceRequest("test-machine", spec)
+	req := buildInstanceRequest(testMachineName, spec)
 
-	if req.Name != "test-machine" {
+	if req.Name != testMachineName {
 		t.Errorf("Name = %s, want test-machine", req.Name)
 	}
 	if req.UserData.Get() == nil || *req.UserData.Get() != spec.UserData {
@@ -2102,11 +2112,11 @@ func TestBuildInstanceRequest_FallbackIpxeScript(t *testing.T) {
 
 func TestBuildInstanceRequest_MachineID(t *testing.T) {
 	spec := &v1beta1.NicoMachineProviderSpec{
-		SiteID:              "site-1",
-		TenantID:            "tenant-1",
-		VpcID:               "vpc-1",
-		SubnetID:            "subnet-1",
-		MachineID:           "machine-1",
+		SiteID:                "site-1",
+		TenantID:              "tenant-1",
+		VpcID:                 "vpc-1",
+		SubnetID:              "subnet-1",
+		MachineID:             "machine-1",
 		AllowUnhealthyMachine: true,
 	}
 
@@ -2131,7 +2141,7 @@ func TestGetNicoClient_MissingEndpoint(t *testing.T) {
 	_ = machinev1beta1.AddToScheme(scheme)
 
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "nico-creds", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testCredsSecret, Namespace: testNamespace},
 		Data: map[string][]byte{
 			"orgName": []byte("org"),
 			"token":   []byte("tok"),
@@ -2141,7 +2151,7 @@ func TestGetNicoClient_MissingEndpoint(t *testing.T) {
 	actuator := &Actuator{client: fakeClient}
 
 	spec := &v1beta1.NicoMachineProviderSpec{
-		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "nico-creds", Namespace: "default"},
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: testCredsSecret, Namespace: testNamespace},
 	}
 	_, _, err := actuator.getNicoClient(context.Background(), spec)
 	if err == nil {
@@ -2158,7 +2168,7 @@ func TestGetNicoClient_MissingOrgName(t *testing.T) {
 	_ = machinev1beta1.AddToScheme(scheme)
 
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "nico-creds", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testCredsSecret, Namespace: testNamespace},
 		Data: map[string][]byte{
 			"endpoint": []byte("https://api.test"),
 			"token":    []byte("tok"),
@@ -2168,7 +2178,7 @@ func TestGetNicoClient_MissingOrgName(t *testing.T) {
 	actuator := &Actuator{client: fakeClient}
 
 	spec := &v1beta1.NicoMachineProviderSpec{
-		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "nico-creds", Namespace: "default"},
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: testCredsSecret, Namespace: testNamespace},
 	}
 	_, _, err := actuator.getNicoClient(context.Background(), spec)
 	if err == nil {
@@ -2182,7 +2192,7 @@ func TestGetNicoClient_MissingToken(t *testing.T) {
 	_ = machinev1beta1.AddToScheme(scheme)
 
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "nico-creds", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testCredsSecret, Namespace: testNamespace},
 		Data: map[string][]byte{
 			"endpoint": []byte("https://api.test"),
 			"orgName":  []byte("org"),
@@ -2192,7 +2202,7 @@ func TestGetNicoClient_MissingToken(t *testing.T) {
 	actuator := &Actuator{client: fakeClient}
 
 	spec := &v1beta1.NicoMachineProviderSpec{
-		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "nico-creds", Namespace: "default"},
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: testCredsSecret, Namespace: testNamespace},
 	}
 	_, _, err := actuator.getNicoClient(context.Background(), spec)
 	if err == nil {
@@ -2209,7 +2219,7 @@ func TestGetNicoClient_SecretNotFound(t *testing.T) {
 	actuator := &Actuator{client: fakeClient}
 
 	spec := &v1beta1.NicoMachineProviderSpec{
-		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "missing", Namespace: "default"},
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "missing", Namespace: testNamespace},
 	}
 	_, _, err := actuator.getNicoClient(context.Background(), spec)
 	if err == nil {
@@ -2223,7 +2233,7 @@ func TestGetNicoClient_Success(t *testing.T) {
 	_ = machinev1beta1.AddToScheme(scheme)
 
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "nico-creds", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testCredsSecret, Namespace: testNamespace},
 		Data: map[string][]byte{
 			"endpoint": []byte("https://api.test"),
 			"orgName":  []byte("test-org"),
@@ -2234,7 +2244,7 @@ func TestGetNicoClient_Success(t *testing.T) {
 	actuator := &Actuator{client: fakeClient}
 
 	spec := &v1beta1.NicoMachineProviderSpec{
-		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: "nico-creds", Namespace: "default"},
+		CredentialsSecret: v1beta1.CredentialsSecretReference{Name: testCredsSecret, Namespace: testNamespace},
 	}
 	client, orgName, err := actuator.getNicoClient(context.Background(), spec)
 	if err != nil {
@@ -2392,7 +2402,7 @@ func TestCreate_DpuExtensionServices_ErrorPath(t *testing.T) {
 
 func TestCreate_TargetedCreation_EnabledViaTenantAccount(t *testing.T) {
 	instanceID := uuid.New().String()
-	siteID := "550e8400-e29b-41d4-a716-446655440000"
+	siteID := testSiteID
 	mock := &mockNicoClient{
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,
@@ -2433,7 +2443,7 @@ func TestCreate_TargetedCreation_EnabledViaTenantAccount(t *testing.T) {
 }
 
 func TestCreate_TargetedCreation_DisabledViaTenantAccount(t *testing.T) {
-	siteID := "550e8400-e29b-41d4-a716-446655440000"
+	siteID := testSiteID
 	mock := &mockNicoClient{
 		createInstance: func(
 			ctx context.Context, org string, req nico.InstanceCreateRequest,

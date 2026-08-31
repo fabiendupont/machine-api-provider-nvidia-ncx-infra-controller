@@ -191,10 +191,16 @@ func (c *nicoClient) GetAllTenantAccount(
 const (
 	statusCodeUnknown = "unknown"
 
-	// Health severity constants used in fault event classification.
 	severityCritical    = "critical"
 	severityWarning     = "warning"
 	severityRemediating = "remediating"
+
+	condInstanceProvisioned  = "InstanceProvisioned"
+	condMachineHealthy       = "MachineHealthy"
+	condNicoFaultRemediation = "NicoFaultRemediation"
+
+	labelHealthy    = "nico.io/healthy"
+	labelAlertCount = "nico.io/health-alert-count"
 )
 
 // APIErrorKind classifies NICo API errors for retry decisions.
@@ -476,7 +482,7 @@ func (a *Actuator) Create(ctx context.Context, machine runtime.Object) error {
 	}
 
 	meta.SetStatusCondition(&providerStatus.Conditions, metav1.Condition{
-		Type:    "InstanceProvisioned",
+		Type:    condInstanceProvisioned,
 		Status:  metav1.ConditionTrue,
 		Reason:  "InstanceCreated",
 		Message: fmt.Sprintf("Instance %s created successfully", *instance.Id),
@@ -563,7 +569,7 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 		// Record provision duration when instance reaches Ready
 		if *instance.Status == nico.INSTANCESTATUS_READY {
 			for _, c := range providerStatus.Conditions {
-				if c.Type == "InstanceProvisioned" && !c.LastTransitionTime.IsZero() {
+				if c.Type == condInstanceProvisioned && !c.LastTransitionTime.IsZero() {
 					nicometrics.InstanceProvisionDuration.WithLabelValues("").Observe(
 						time.Since(c.LastTransitionTime.Time).Seconds())
 					break
@@ -722,7 +728,8 @@ func (a *Actuator) Delete(ctx context.Context, machine runtime.Object) error {
 		} else {
 			nicometrics.APICallErrors.WithLabelValues("DeleteInstance", statusCode).Inc()
 			if a.eventRecorder != nil {
-				a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning, "FailedDelete", "", "Failed to delete instance: %v", err)
+				a.eventRecorder.Eventf(machineObj, nil, corev1.EventTypeWarning,
+					"FailedDelete", "", "Failed to delete instance: %v", err)
 			}
 			return fmt.Errorf("failed to delete instance: %w", err)
 		}
@@ -1240,7 +1247,7 @@ func (a *Actuator) checkProvisioningTimeout(
 
 	// Find the InstanceProvisioned condition set during Create
 	for _, c := range providerStatus.Conditions {
-		if c.Type == "InstanceProvisioned" && !c.LastTransitionTime.IsZero() {
+		if c.Type == condInstanceProvisioned && !c.LastTransitionTime.IsZero() {
 			if time.Since(c.LastTransitionTime.Time) > ProvisioningTimeout {
 				setCondition(providerStatus, "InstanceReady", metav1.ConditionFalse,
 					"ProvisioningTimeout",
@@ -1357,7 +1364,7 @@ func (a *Actuator) checkPreFlightHealth(
 	setCondition(providerStatus, "FaultBlockedCreation", metav1.ConditionTrue,
 		fmt.Sprintf("FaultBlocked_%d", attempt),
 		fmt.Sprintf("Attempt %d of %d: %s", attempt, MaxFaultBlockedAttempts, alertMsg))
-	setCondition(providerStatus, "MachineHealthy", metav1.ConditionFalse,
+	setCondition(providerStatus, condMachineHealthy, metav1.ConditionFalse,
 		"CriticalFault", alertMsg)
 
 	// After max attempts, escalate to FailureReason
@@ -1565,7 +1572,7 @@ func (a *Actuator) updateMachineHealth(
 	}
 
 	// Snapshot previous health state for gauge tracking
-	wasUnhealthy := isConditionFalse(providerStatus, "MachineHealthy")
+	wasUnhealthy := isConditionFalse(providerStatus, condMachineHealthy)
 
 	// Try HealthReport API first, fall back to JSONB
 	if a.updateMachineHealthFromReports(ctx, nicoAPIClient, orgName, *machineID, providerStatus, wasUnhealthy) {
@@ -1597,7 +1604,7 @@ func trackUnhealthyGauge(
 	wasUnhealthy bool,
 	providerStatus *v1beta1.NicoMachineProviderStatus,
 ) {
-	isUnhealthy := isConditionFalse(providerStatus, "MachineHealthy")
+	isUnhealthy := isConditionFalse(providerStatus, condMachineHealthy)
 	if !wasUnhealthy && isUnhealthy {
 		nicometrics.MachinesUnhealthy.Inc()
 	} else if wasUnhealthy && !isUnhealthy {
@@ -1630,54 +1637,54 @@ func (a *Actuator) updateMachineHealthFromReports(
 	}
 
 	if len(allAlerts) == 0 {
-		setCondition(providerStatus, "MachineHealthy", metav1.ConditionTrue,
+		setCondition(providerStatus, condMachineHealthy, metav1.ConditionTrue,
 			"Healthy", "No health alerts")
 		providerStatus.HealthLabels = map[string]string{
-			"nico.io/healthy": "true",
+			labelHealthy: "true",
 		}
-		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionFalse,
+		setCondition(providerStatus, condNicoFaultRemediation, metav1.ConditionFalse,
 			"NoRemediation", "No active fault remediation")
 	} else {
 
-	critical, warning := classifyAlerts(allAlerts)
+		critical, warning := classifyAlerts(allAlerts)
 
-	if len(critical) > 0 {
-		reason := "CriticalFault"
-		msg := fmt.Sprintf("Machine has %d critical health alert(s)", len(critical))
-		if len(critical[0].Classifications) > 0 {
-			reason = critical[0].Classifications[0]
+		if len(critical) > 0 {
+			reason := "CriticalFault"
+			msg := fmt.Sprintf("Machine has %d critical health alert(s)", len(critical))
+			if len(critical[0].Classifications) > 0 {
+				reason = critical[0].Classifications[0]
+			}
+			if critical[0].Message != "" {
+				msg = critical[0].Message
+			}
+			setCondition(providerStatus, condMachineHealthy, metav1.ConditionFalse,
+				reason, msg)
+			providerStatus.HealthLabels = map[string]string{
+				labelHealthy:    "false",
+				labelAlertCount: fmt.Sprintf("%d", len(allAlerts)),
+			}
+		} else if len(warning) > 0 {
+			warnMsg := fmt.Sprintf("Machine has %d warning alert(s)", len(warning))
+			setCondition(providerStatus, condMachineHealthy, metav1.ConditionTrue,
+				"HealthyWithWarnings", warnMsg)
+			providerStatus.HealthLabels = map[string]string{
+				labelHealthy:    "true",
+				labelAlertCount: fmt.Sprintf("%d", len(warning)),
+			}
 		}
-		if critical[0].Message != "" {
-			msg = critical[0].Message
-		}
-		setCondition(providerStatus, "MachineHealthy", metav1.ConditionFalse,
-			reason, msg)
-		providerStatus.HealthLabels = map[string]string{
-			"nico.io/healthy":            "false",
-			"nico.io/health-alert-count": fmt.Sprintf("%d", len(allAlerts)),
-		}
-	} else if len(warning) > 0 {
-		warnMsg := fmt.Sprintf("Machine has %d warning alert(s)", len(warning))
-		setCondition(providerStatus, "MachineHealthy", metav1.ConditionTrue,
-			"HealthyWithWarnings", warnMsg)
-		providerStatus.HealthLabels = map[string]string{
-			"nico.io/healthy":            "true",
-			"nico.io/health-alert-count": fmt.Sprintf("%d", len(warning)),
-		}
-	}
 
-	if hasRemediatingAlert(allAlerts) {
-		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionTrue,
-			"RemediationInProgress", "Automated fault remediation in progress")
-	} else {
-		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionFalse,
-			"NoRemediation", "No active fault remediation")
-	}
+		if hasRemediatingAlert(allAlerts) {
+			setCondition(providerStatus, condNicoFaultRemediation, metav1.ConditionTrue,
+				"RemediationInProgress", "Automated fault remediation in progress")
+		} else {
+			setCondition(providerStatus, condNicoFaultRemediation, metav1.ConditionFalse,
+				"NoRemediation", "No active fault remediation")
+		}
 
 	} // end else (has alerts)
 
 	// Clean up k8s-mhc health report on unhealthy→healthy transition
-	isUnhealthy := isConditionFalse(providerStatus, "MachineHealthy")
+	isUnhealthy := isConditionFalse(providerStatus, condMachineHealthy)
 	if wasUnhealthy && !isUnhealthy {
 		resp, delErr := nicoAPIClient.DeleteMachineHealthReport(ctx, orgName, machineID, "k8s-mhc")
 		if delErr == nil && resp != nil && resp.StatusCode < 300 {
@@ -1711,12 +1718,12 @@ func (a *Actuator) updateMachineHealthFromJSONB(
 	}
 
 	if len(machine.Health.Alerts) == 0 {
-		setCondition(providerStatus, "MachineHealthy", metav1.ConditionTrue,
+		setCondition(providerStatus, condMachineHealthy, metav1.ConditionTrue,
 			"Healthy", "Machine has no health alerts")
 		providerStatus.HealthLabels = map[string]string{
-			"nico.io/healthy": "true",
+			labelHealthy: "true",
 		}
-		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionFalse,
+		setCondition(providerStatus, condNicoFaultRemediation, metav1.ConditionFalse,
 			"NoRemediation", "No active fault remediation")
 		return
 	}
@@ -1732,27 +1739,27 @@ func (a *Actuator) updateMachineHealthFromJSONB(
 		if len(critical[0].Classifications) > 0 {
 			reason = critical[0].Classifications[0]
 		}
-		setCondition(providerStatus, "MachineHealthy", metav1.ConditionFalse,
+		setCondition(providerStatus, condMachineHealthy, metav1.ConditionFalse,
 			reason, msg)
 		providerStatus.HealthLabels = map[string]string{
-			"nico.io/healthy":            "false",
-			"nico.io/health-alert-count": fmt.Sprintf("%d", len(machine.Health.Alerts)),
+			labelHealthy:    "false",
+			labelAlertCount: fmt.Sprintf("%d", len(machine.Health.Alerts)),
 		}
 	} else if len(warning) > 0 {
 		warnMsg := fmt.Sprintf("Machine has %d warning alert(s)", len(warning))
-		setCondition(providerStatus, "MachineHealthy", metav1.ConditionTrue,
+		setCondition(providerStatus, condMachineHealthy, metav1.ConditionTrue,
 			"HealthyWithWarnings", warnMsg)
 		providerStatus.HealthLabels = map[string]string{
-			"nico.io/healthy":            "true",
-			"nico.io/health-alert-count": fmt.Sprintf("%d", len(warning)),
+			labelHealthy:    "true",
+			labelAlertCount: fmt.Sprintf("%d", len(warning)),
 		}
 	}
 
 	if hasRemediatingAlert(machine.Health.Alerts) {
-		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionTrue,
+		setCondition(providerStatus, condNicoFaultRemediation, metav1.ConditionTrue,
 			"RemediationInProgress", "Automated fault remediation in progress")
 	} else {
-		setCondition(providerStatus, "NicoFaultRemediation", metav1.ConditionFalse,
+		setCondition(providerStatus, condNicoFaultRemediation, metav1.ConditionFalse,
 			"NoRemediation", "No active fault remediation")
 	}
 }
