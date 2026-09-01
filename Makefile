@@ -13,7 +13,7 @@ GOBIN=$(shell go env GOBIN)
 endif
 
 SETUP_ENVTEST ?= $(GOBIN)/setup-envtest
-ENVTEST_K8S_VERSION ?= 1.35.0
+ENVTEST_K8S_VERSION ?= 1.36.2
 
 .PHONY: all
 all: build
