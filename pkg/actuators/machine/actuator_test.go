@@ -2580,3 +2580,98 @@ func TestCreate_TargetedCreation_FallsBackToTenantAPI(t *testing.T) {
 		t.Fatalf("Create() unexpected error: %v", err)
 	}
 }
+
+// Topology labels
+
+func TestUpdate_TopologyLabels(t *testing.T) {
+	instanceID := uuid.New().String()
+	siteID := testSiteID
+	nvlPartition := "nvl-part-1"
+	nvlDomain := "nvl-domain-1"
+	ibPartition := "ib-part-1"
+
+	mock := &mockNicoClient{
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
+			inst := testInstance(instanceID)
+			inst.SiteId = &siteID
+			inst.InfinibandInterfaces = []nico.InfiniBandInterface{
+				{PartitionId: &ibPartition},
+			}
+			inst.NvLinkInterfaces = []nico.NVLinkInterface{
+				{
+					NvLinkLogicalPartitionId: &nvlPartition,
+					NvLinkDomainId:           *nico.NewNullableString(&nvlDomain),
+				},
+			}
+			return inst, &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	providerStatus := v1beta1.NicoMachineProviderStatus{
+		InstanceID: &instanceID,
+	}
+	spec := validProviderSpec()
+	machine := createTypedTestMachineWithStatus(spec, providerStatus)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+
+	labels := machine.GetLabels()
+	if labels[topoLabelZone] != siteID {
+		t.Errorf("zone = %q, want %q", labels[topoLabelZone], siteID)
+	}
+	if labels[topoLabelInstanceType] != spec.InstanceTypeID {
+		t.Errorf("instance-type = %q, want %q",
+			labels[topoLabelInstanceType], spec.InstanceTypeID)
+	}
+	if labels[topoLabelMachineID] != testMachineID {
+		t.Errorf("machine-id = %q, want %q",
+			labels[topoLabelMachineID], testMachineID)
+	}
+	if labels[topoLabelNVLinkPartition] != nvlPartition {
+		t.Errorf("nvlink-partition = %q, want %q",
+			labels[topoLabelNVLinkPartition], nvlPartition)
+	}
+	if labels[topoLabelNVLinkDomain] != nvlDomain {
+		t.Errorf("nvlink-domain = %q, want %q",
+			labels[topoLabelNVLinkDomain], nvlDomain)
+	}
+	if labels[topoLabelIBPartition] != ibPartition {
+		t.Errorf("ib-partition = %q, want %q",
+			labels[topoLabelIBPartition], ibPartition)
+	}
+}
+
+func TestUpdate_TopologyLabels_MinimalInstance(t *testing.T) {
+	instanceID := uuid.New().String()
+
+	mock := &mockNicoClient{
+		getInstance: func(ctx context.Context, org string, id string) (*nico.Instance, *http.Response, error) {
+			return testInstance(instanceID), &http.Response{StatusCode: 200}, nil
+		},
+	}
+
+	providerStatus := v1beta1.NicoMachineProviderStatus{InstanceID: &instanceID}
+	machine := createTypedTestMachineWithStatus(validProviderSpec(), providerStatus)
+	actuator, _ := newTestActuatorWithMachine(mock, machine)
+
+	err := actuator.Update(context.Background(), machine)
+	if err != nil {
+		t.Fatalf("Update() unexpected error: %v", err)
+	}
+
+	labels := machine.GetLabels()
+	if _, ok := labels[topoLabelNVLinkPartition]; ok {
+		t.Error("nvlink-partition should not be set without NVLink interfaces")
+	}
+	if _, ok := labels[topoLabelIBPartition]; ok {
+		t.Error("ib-partition should not be set without IB interfaces")
+	}
+	if labels[topoLabelMachineID] != testMachineID {
+		t.Errorf("machine-id = %q, want %q",
+			labels[topoLabelMachineID], testMachineID)
+	}
+}

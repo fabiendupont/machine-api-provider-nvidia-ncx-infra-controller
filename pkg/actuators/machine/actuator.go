@@ -226,10 +226,18 @@ const (
 	condMachineHealthy       = "MachineHealthy"
 	condNicoFaultRemediation = "NicoFaultRemediation"
 
-	labelHealthy    = "nico.io/healthy"
-	labelAlertCount = "nico.io/health-alert-count"
+	labelHealthy    = "infra.nvidia.com/healthy"
+	labelAlertCount = "infra.nvidia.com/health-alert-count"
 	labelTrue       = "true"
 	labelFalse      = "false"
+
+	topoLabelZone            = "topology.kubernetes.io/zone"
+	topoLabelInstanceType    = "node.kubernetes.io/instance-type"
+	topoLabelMachineID       = "infra.nvidia.com/machine-id"
+	topoLabelSKU             = "infra.nvidia.com/sku"
+	topoLabelNVLinkPartition = "infra.nvidia.com/nvlink-partition"
+	topoLabelNVLinkDomain    = "infra.nvidia.com/nvlink-domain"
+	topoLabelIBPartition     = "infra.nvidia.com/infiniband-partition"
 )
 
 // APIErrorKind classifies NICo API errors for retry decisions.
@@ -608,6 +616,12 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 	}
 	if instance.MachineId.Get() != nil {
 		providerStatus.MachineID = instance.MachineId.Get()
+	}
+
+	// Set topology labels from instance data and persist
+	a.setTopologyLabels(machineObj, instance, providerSpec)
+	if err := a.client.Update(ctx, machineObj); err != nil {
+		return fmt.Errorf("failed to update topology labels: %w", err)
 	}
 
 	// Check machine health if a physical machine is assigned
@@ -1352,6 +1366,47 @@ func isMHCRemediation(machine client.Object) bool {
 	}
 	_, hasUnhealthy := annotations["machine.openshift.io/unhealthy"]
 	return hasUnhealthy
+}
+
+// setTopologyLabels sets infrastructure topology labels on the Machine
+// object so they propagate to the Node via the Machine API controller.
+func (a *Actuator) setTopologyLabels(
+	machineObj client.Object,
+	instance *nico.Instance,
+	providerSpec *v1beta1.NicoMachineProviderSpec,
+) {
+	labels := machineObj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+
+	if instance.SiteId != nil {
+		labels[topoLabelZone] = *instance.SiteId
+	}
+	if providerSpec.InstanceTypeID != "" {
+		labels[topoLabelInstanceType] = providerSpec.InstanceTypeID
+	}
+	if mid := instance.MachineId.Get(); mid != nil && *mid != "" {
+		labels[topoLabelMachineID] = *mid
+	}
+	for _, nvl := range instance.NvLinkInterfaces {
+		if nvl.NvLinkLogicalPartitionId != nil {
+			labels[topoLabelNVLinkPartition] = *nvl.NvLinkLogicalPartitionId
+		}
+		if did := nvl.NvLinkDomainId.Get(); did != nil && *did != "" {
+			labels[topoLabelNVLinkDomain] = *did
+		}
+		break
+	}
+
+	for _, ib := range instance.InfinibandInterfaces {
+		if ib.PartitionId != nil {
+			labels[topoLabelIBPartition] = *ib.PartitionId
+		}
+		break
+	}
+
+	machineObj.SetLabels(labels)
 }
 
 // MaxFaultBlockedAttempts is the maximum number of consecutive fault-blocked

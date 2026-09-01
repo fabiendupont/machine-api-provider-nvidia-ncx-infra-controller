@@ -12,8 +12,8 @@ import (
 
 const (
 	hardwareDetailsAnnotation = "inspect.metal3.io/hardwaredetails"
-	nicoMachineIDLabel        = "nico.io/machine-id"
-	nicoSiteIDLabel           = "nico.io/site-id"
+	nicoMachineIDLabel        = "infra.nvidia.com/machine-id"
+	nicoSiteIDLabel           = "infra.nvidia.com/site-id"
 )
 
 // HardwareDetails mirrors the Metal3 hardware details annotation schema.

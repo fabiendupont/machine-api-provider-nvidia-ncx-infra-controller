@@ -128,7 +128,7 @@ All naming renamed from Carbide to NICo:
 - API group: `nicoprovider.infrastructure.cluster.x-k8s.io`
 - Finalizer: `machine.openshift.io/nico`
 - Metrics: `nico_mapi_*`
-- Health labels: `nico.io/healthy`
+- Health labels: `infra.nvidia.com/healthy`
 - All manifests, README, OLM bundle updated
 - Backward compat: `ParseProviderID()` accepts `nvidia-carbide://`,
   `LegacyMachineFinalizer` removed on delete
@@ -210,6 +210,21 @@ BMH includes hardware details annotation (system vendor, BIOS,
 NICs, CPU, RAM, storage). HFC includes firmware component
 versions from Site Explorer plus BMC firmware rev and GPU vbios
 from machine metadata. Degrades gracefully on 403 (tenant org).
+
+### ~~14. Topology labels for scheduler-aware placement~~ (DONE)
+
+During `Update()`, sets `infra.nvidia.com/*` topology labels on
+the Machine object so they propagate to the Node:
+- `topology.kubernetes.io/zone` — NICo site ID
+- `node.kubernetes.io/instance-type` — NICo instance type
+- `infra.nvidia.com/machine-id` — physical machine identity
+- `infra.nvidia.com/nvlink-partition` — NVLink logical partition
+- `infra.nvidia.com/nvlink-domain` — NVLink domain (multi-node)
+- `infra.nvidia.com/infiniband-partition` — IB partition
+
+These enable Kueue ResourceFlavors and Kai topology-aware
+scheduling to optimize GPU workload placement based on NVLink
+domain locality and InfiniBand fabric topology.
 
 ## Design constraints
 
