@@ -1398,20 +1398,20 @@ func (a *Actuator) setTopologyLabels(
 	if mid := instance.MachineId.Get(); mid != nil {
 		set(topoLabelMachineID, *mid)
 	}
-	for _, nvl := range instance.NvLinkInterfaces {
+	if len(instance.NvLinkInterfaces) > 0 {
+		nvl := instance.NvLinkInterfaces[0]
 		if nvl.NvLinkLogicalPartitionId != nil {
 			set(topoLabelNVLinkPartition, *nvl.NvLinkLogicalPartitionId)
 		}
 		if did := nvl.NvLinkDomainId.Get(); did != nil {
 			set(topoLabelNVLinkDomain, *did)
 		}
-		break
 	}
-	for _, ib := range instance.InfinibandInterfaces {
+	if len(instance.InfinibandInterfaces) > 0 {
+		ib := instance.InfinibandInterfaces[0]
 		if ib.PartitionId != nil {
 			set(topoLabelIBPartition, *ib.PartitionId)
 		}
-		break
 	}
 
 	if changed {

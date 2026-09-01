@@ -30,9 +30,9 @@ type Reconciler struct {
 	OrgName    string
 	Namespace  string
 
-	skuCache      map[string]*nico.Sku
+	skuCache       map[string]*nico.Sku
 	skuCacheExpiry time.Time
-	skuMu         sync.Mutex
+	skuMu          sync.Mutex
 }
 
 func (r *Reconciler) syncMachine(
@@ -168,7 +168,7 @@ func (r *Reconciler) Start(ctx context.Context) error {
 
 	// Run immediately on startup, then on ticker
 	for {
-		r.sync(context.WithValue(ctx, logKey, logger))
+		r.sync(log.IntoContext(ctx, logger))
 		select {
 		case <-ctx.Done():
 			return nil
@@ -177,17 +177,8 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	}
 }
 
-type contextKey string
-
-const logKey contextKey = "logger"
-
 func (r *Reconciler) sync(ctx context.Context) {
 	logger := log.FromContext(ctx)
-	if v := ctx.Value(logKey); v != nil {
-		if l, ok := v.(interface{ Info(string, ...interface{}) }); ok {
-			_ = l
-		}
-	}
 
 	machines, httpResp, err := r.NicoClient.GetAllMachine(ctx, r.OrgName)
 	if err != nil || httpResp == nil || httpResp.StatusCode >= 300 {
