@@ -20,7 +20,7 @@ const (
 type HardwareDetails struct {
 	SystemVendor SystemVendor `json:"systemVendor,omitempty"`
 	Firmware     Firmware     `json:"firmware,omitempty"`
-	RAMGiB       int          `json:"ramMebibytes,omitempty"`
+	RAMMebibytes int          `json:"ramMebibytes,omitempty"`
 	NIC          []NIC        `json:"nics,omitempty"`
 	CPU          CPU          `json:"cpu,omitempty"`
 	Storage      []Disk       `json:"storage,omitempty"`
@@ -53,9 +53,9 @@ type CPU struct {
 }
 
 type Disk struct {
-	SizeGiB int    `json:"sizeBytes,omitempty"`
-	Vendor  string `json:"vendor,omitempty"`
-	Model   string `json:"model,omitempty"`
+	SizeBytes int64  `json:"sizeBytes,omitempty"`
+	Vendor    string `json:"vendor,omitempty"`
+	Model     string `json:"model,omitempty"`
 }
 
 // MachineToBaremetalHost converts a NICo Machine to a BareMetalHost CR.
@@ -211,7 +211,9 @@ func buildHardwareDetails(m nico.Machine, sku *nico.Sku) HardwareDetails {
 		}
 		for _, mem := range sku.Components.Memory {
 			if mem.CapacityMb != nil && mem.Count != nil {
-				hd.RAMGiB += int(*mem.CapacityMb) * int(*mem.Count)
+				// Convert MB to MiB: 1 MB = 1,000,000 / 1,048,576 MiB ≈ 0.9537 MiB
+				totalMB := int64(*mem.CapacityMb) * int64(*mem.Count)
+				hd.RAMMebibytes += int(totalMB * 1000000 / 1048576)
 			}
 		}
 		for _, stor := range sku.Components.Storage {
@@ -223,7 +225,7 @@ func buildHardwareDetails(m nico.Machine, sku *nico.Sku) HardwareDetails {
 				d.Model = *stor.Model
 			}
 			if stor.CapacityMb != nil {
-				d.SizeGiB = int(*stor.CapacityMb)
+				d.SizeBytes = int64(*stor.CapacityMb) * 1000000
 			}
 			hd.Storage = append(hd.Storage, d)
 		}

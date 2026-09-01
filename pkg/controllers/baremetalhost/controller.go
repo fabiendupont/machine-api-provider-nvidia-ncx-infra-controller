@@ -35,36 +35,6 @@ type Reconciler struct {
 	skuMu         sync.Mutex
 }
 
-// Reconcile is triggered periodically to sync NICo machines.
-func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-	logger.Info("Syncing NICo machines to BareMetalHost CRs")
-
-	machines, httpResp, err := r.NicoClient.GetAllMachine(ctx, r.OrgName)
-	if err != nil || httpResp == nil || httpResp.StatusCode >= 300 {
-		if httpResp != nil && httpResp.StatusCode == 403 {
-			logger.Info("Provider-admin access required for machine metadata, skipping BMH sync")
-			return ctrl.Result{RequeueAfter: syncInterval}, nil
-		}
-		logger.Error(err, "Failed to list NICo machines")
-		return ctrl.Result{RequeueAfter: syncInterval}, err
-	}
-
-	skuMap := r.getSkuMap(ctx)
-	firmwareMap := r.getFirmwareMap(ctx)
-
-	for _, m := range machines {
-		if m.Id == nil {
-			continue
-		}
-		if err := r.syncMachine(ctx, m, skuMap, firmwareMap); err != nil {
-			logger.Error(err, "Failed to sync machine", "machineId", *m.Id)
-		}
-	}
-
-	return ctrl.Result{RequeueAfter: syncInterval}, nil
-}
-
 func (r *Reconciler) syncMachine(
 	ctx context.Context,
 	m nico.Machine,
@@ -173,21 +143,76 @@ func (r *Reconciler) getFirmwareMap(ctx context.Context) map[string]map[string]s
 	return fwMap
 }
 
-// SetupWithManager registers the reconciler. It uses a dummy source
-// that triggers periodically since we're polling NICo, not watching CRs.
+// SetupWithManager registers the reconciler as a periodic runnable
+// since we poll NICo rather than watching CRs.
 func SetupWithManager(
 	mgr ctrl.Manager,
 	nicoClient machine.NicoClientInterface,
 	orgName, namespace string,
 ) error {
 	r := &Reconciler{
-		Client:    mgr.GetClient(),
+		Client:     mgr.GetClient(),
 		NicoClient: nicoClient,
-		OrgName:   orgName,
-		Namespace: namespace,
+		OrgName:    orgName,
+		Namespace:  namespace,
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&metal3.BareMetalHost{}).
-		Complete(r)
+	return mgr.Add(r)
+}
+
+// Start implements manager.Runnable for periodic polling.
+func (r *Reconciler) Start(ctx context.Context) error {
+	logger := log.FromContext(ctx).WithName("baremetalhost-sync")
+	ticker := time.NewTicker(syncInterval)
+	defer ticker.Stop()
+
+	// Run immediately on startup, then on ticker
+	for {
+		r.sync(context.WithValue(ctx, logKey, logger))
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+type contextKey string
+
+const logKey contextKey = "logger"
+
+func (r *Reconciler) sync(ctx context.Context) {
+	logger := log.FromContext(ctx)
+	if v := ctx.Value(logKey); v != nil {
+		if l, ok := v.(interface{ Info(string, ...interface{}) }); ok {
+			_ = l
+		}
+	}
+
+	machines, httpResp, err := r.NicoClient.GetAllMachine(ctx, r.OrgName)
+	if err != nil || httpResp == nil || httpResp.StatusCode >= 300 {
+		if httpResp != nil && httpResp.StatusCode == 403 {
+			logger.Info("Provider-admin access required, skipping BMH sync")
+			return
+		}
+		if err != nil {
+			logger.Error(err, "Failed to list NICo machines")
+		} else {
+			logger.Info("Failed to list NICo machines",
+				"statusCode", httpResp.StatusCode)
+		}
+		return
+	}
+
+	skuMap := r.getSkuMap(ctx)
+	firmwareMap := r.getFirmwareMap(ctx)
+
+	for _, m := range machines {
+		if m.Id == nil {
+			continue
+		}
+		if syncErr := r.syncMachine(ctx, m, skuMap, firmwareMap); syncErr != nil {
+			logger.Error(syncErr, "Failed to sync machine", "machineId", *m.Id)
+		}
+	}
 }

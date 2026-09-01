@@ -110,11 +110,18 @@ func TestMachineToBaremetalHost_WithSKU(t *testing.T) {
 	if hd.CPU.Count != 2 {
 		t.Errorf("CPU count = %d", hd.CPU.Count)
 	}
-	if hd.RAMGiB != 32768*32 {
-		t.Errorf("RAM = %d MiB, want %d", hd.RAMGiB, 32768*32)
+	// 32768 MB * 32 modules = 1048576 MB → converted to MiB: 1048576 * 1000000 / 1048576 = 1000000 MiB
+	expectedRAM := int(int64(32768) * int64(32) * 1000000 / 1048576)
+	if hd.RAMMebibytes != expectedRAM {
+		t.Errorf("RAM = %d MiB, want %d", hd.RAMMebibytes, expectedRAM)
 	}
 	if len(hd.Storage) != 1 || hd.Storage[0].Vendor != "Samsung" {
 		t.Errorf("Storage = %+v", hd.Storage)
+	}
+	// 3840000 MB → bytes
+	expectedBytes := int64(3840000) * 1000000
+	if hd.Storage[0].SizeBytes != expectedBytes {
+		t.Errorf("Storage size = %d bytes, want %d", hd.Storage[0].SizeBytes, expectedBytes)
 	}
 }
 

@@ -234,7 +234,6 @@ const (
 	topoLabelZone            = "topology.kubernetes.io/zone"
 	topoLabelInstanceType    = "node.kubernetes.io/instance-type"
 	topoLabelMachineID       = "infra.nvidia.com/machine-id"
-	topoLabelSKU             = "infra.nvidia.com/sku"
 	topoLabelNVLinkPartition = "infra.nvidia.com/nvlink-partition"
 	topoLabelNVLinkDomain    = "infra.nvidia.com/nvlink-domain"
 	topoLabelIBPartition     = "infra.nvidia.com/infiniband-partition"
@@ -618,10 +617,11 @@ func (a *Actuator) Update(ctx context.Context, machine runtime.Object) error {
 		providerStatus.MachineID = instance.MachineId.Get()
 	}
 
-	// Set topology labels from instance data and persist
-	a.setTopologyLabels(machineObj, instance, providerSpec)
-	if err := a.client.Update(ctx, machineObj); err != nil {
-		return fmt.Errorf("failed to update topology labels: %w", err)
+	// Set topology labels from instance data and persist before status mutations
+	if a.setTopologyLabels(machineObj, instance, providerSpec) {
+		if err := a.client.Update(ctx, machineObj); err != nil {
+			return fmt.Errorf("failed to update machine labels: %w", err)
+		}
 	}
 
 	// Check machine health if a physical machine is assigned
@@ -1370,43 +1370,54 @@ func isMHCRemediation(machine client.Object) bool {
 
 // setTopologyLabels sets infrastructure topology labels on the Machine
 // object so they propagate to the Node via the Machine API controller.
+// Returns true if any labels changed.
 func (a *Actuator) setTopologyLabels(
 	machineObj client.Object,
 	instance *nico.Instance,
 	providerSpec *v1beta1.NicoMachineProviderSpec,
-) {
+) bool {
 	labels := machineObj.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
 	}
 
+	changed := false
+	set := func(key, value string) {
+		if value != "" && labels[key] != value {
+			labels[key] = value
+			changed = true
+		}
+	}
+
 	if instance.SiteId != nil {
-		labels[topoLabelZone] = *instance.SiteId
+		set(topoLabelZone, *instance.SiteId)
 	}
 	if providerSpec.InstanceTypeID != "" {
-		labels[topoLabelInstanceType] = providerSpec.InstanceTypeID
+		set(topoLabelInstanceType, providerSpec.InstanceTypeID)
 	}
-	if mid := instance.MachineId.Get(); mid != nil && *mid != "" {
-		labels[topoLabelMachineID] = *mid
+	if mid := instance.MachineId.Get(); mid != nil {
+		set(topoLabelMachineID, *mid)
 	}
 	for _, nvl := range instance.NvLinkInterfaces {
 		if nvl.NvLinkLogicalPartitionId != nil {
-			labels[topoLabelNVLinkPartition] = *nvl.NvLinkLogicalPartitionId
+			set(topoLabelNVLinkPartition, *nvl.NvLinkLogicalPartitionId)
 		}
-		if did := nvl.NvLinkDomainId.Get(); did != nil && *did != "" {
-			labels[topoLabelNVLinkDomain] = *did
+		if did := nvl.NvLinkDomainId.Get(); did != nil {
+			set(topoLabelNVLinkDomain, *did)
 		}
 		break
 	}
-
 	for _, ib := range instance.InfinibandInterfaces {
 		if ib.PartitionId != nil {
-			labels[topoLabelIBPartition] = *ib.PartitionId
+			set(topoLabelIBPartition, *ib.PartitionId)
 		}
 		break
 	}
 
-	machineObj.SetLabels(labels)
+	if changed {
+		machineObj.SetLabels(labels)
+	}
+	return changed
 }
 
 // MaxFaultBlockedAttempts is the maximum number of consecutive fault-blocked

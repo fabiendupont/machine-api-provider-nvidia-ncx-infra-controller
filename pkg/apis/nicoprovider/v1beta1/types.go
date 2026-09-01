@@ -155,7 +155,7 @@ type NicoMachineProviderStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
 	// HealthLabels contains health-related labels matching the CCM.
-	// Keys: nico.io/healthy, nico.io/health-alert-count
+	// Keys: infra.nvidia.com/healthy, infra.nvidia.com/health-alert-count
 	// +optional
 	HealthLabels map[string]string `json:"healthLabels,omitempty"`
 }
