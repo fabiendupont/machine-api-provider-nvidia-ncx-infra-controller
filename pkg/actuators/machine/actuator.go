@@ -86,6 +86,15 @@ type NicoClientInterface interface {
 	GetAllTenantAccount(
 		ctx context.Context, org string,
 	) ([]nico.TenantAccount, *http.Response, error)
+	GetAllMachine(
+		ctx context.Context, org string,
+	) ([]nico.Machine, *http.Response, error)
+	GetAllSku(
+		ctx context.Context, org string,
+	) ([]nico.Sku, *http.Response, error)
+	GetAllSiteExplorerEndpoint(
+		ctx context.Context, org string,
+	) ([]nico.ExploredEndpoint, *http.Response, error)
 }
 
 // nicoClient wraps the SDK APIClient and injects auth context
@@ -186,6 +195,24 @@ func (c *nicoClient) GetAllTenantAccount(
 	ctx context.Context, org string,
 ) ([]nico.TenantAccount, *http.Response, error) {
 	return c.client.TenantAccountAPI.GetAllTenantAccount(c.authCtx(ctx), org).Execute()
+}
+
+func (c *nicoClient) GetAllMachine(
+	ctx context.Context, org string,
+) ([]nico.Machine, *http.Response, error) {
+	return c.client.MachineAPI.GetAllMachine(c.authCtx(ctx), org).IncludeMetadata(true).Execute()
+}
+
+func (c *nicoClient) GetAllSku(
+	ctx context.Context, org string,
+) ([]nico.Sku, *http.Response, error) {
+	return c.client.SKUAPI.GetAllSku(c.authCtx(ctx), org).Execute()
+}
+
+func (c *nicoClient) GetAllSiteExplorerEndpoint(
+	ctx context.Context, org string,
+) ([]nico.ExploredEndpoint, *http.Response, error) {
+	return c.client.SiteExplorerAPI.GetAllSiteExplorerEndpoint(c.authCtx(ctx), org).Execute()
 }
 
 const (

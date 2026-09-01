@@ -222,6 +222,24 @@ func (m *mockNicoClient) GetAllTenantAccount(
 	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
 }
 
+func (m *mockNicoClient) GetAllMachine(
+	ctx context.Context, org string,
+) ([]nico.Machine, *http.Response, error) {
+	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetAllSku(
+	ctx context.Context, org string,
+) ([]nico.Sku, *http.Response, error) {
+	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetAllSiteExplorerEndpoint(
+	ctx context.Context, org string,
+) ([]nico.ExploredEndpoint, *http.Response, error) {
+	return nil, &http.Response{StatusCode: 404}, fmt.Errorf("not found")
+}
+
 func newTestActuator(mock *mockNicoClient) *Actuator {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)

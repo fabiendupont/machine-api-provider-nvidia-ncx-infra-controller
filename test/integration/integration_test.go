@@ -225,6 +225,24 @@ func (m *mockNicoClient) GetAllTenantAccount(
 	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
 }
 
+func (m *mockNicoClient) GetAllMachine(
+	ctx context.Context, org string,
+) ([]nico.Machine, *http.Response, error) {
+	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetAllSku(
+	ctx context.Context, org string,
+) ([]nico.Sku, *http.Response, error) {
+	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
+}
+
+func (m *mockNicoClient) GetAllSiteExplorerEndpoint(
+	ctx context.Context, org string,
+) ([]nico.ExploredEndpoint, *http.Response, error) {
+	return nil, mockHTTPResponse(404), fmt.Errorf("not found")
+}
+
 var _ = Describe("Machine Actuator Integration", func() {
 	var (
 		namespace *corev1.Namespace

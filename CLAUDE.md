@@ -24,6 +24,7 @@ NVIDIA_CARBIDE_API_ENDPOINT=https://... go test ./test/e2e/ -v
 - `pkg/actuators/machine/actuator.go` — Create/Update/Exists/Delete
   (main logic, ~1500 LOC)
 - `pkg/controllers/machine/controller.go` — reconciler loop
+- `pkg/controllers/baremetalhost/` — BMH/HFC sync from NICo
 - `pkg/providerid/providerid.go` — provider ID parsing
 - `pkg/metrics/metrics.go` — Prometheus metrics
 - `pkg/apis/nicoprovider/v1beta1/webhook.go` — admission
@@ -191,6 +192,24 @@ deprecated `TenantCapabilities.TargetedInstanceCreation` on
 `SiteCapabilities` for the target site. Empty `SiteIds`
 means default (applies to all sites). Falls back to
 `GetCurrentTenant` if TenantAccount API is unavailable.
+
+### ~~13. BareMetalHost and HostFirmwareComponents~~ (DONE)
+
+Separate controller (`pkg/controllers/baremetalhost/`) syncs NICo
+machines to Metal3 `BareMetalHost` CRs with
+`externallyProvisioned: true` and `HostFirmwareComponents` CRs.
+
+Data sources (all via NICo API, which aggregates RMS data):
+- `GetAllMachine(org)` with `includeMetadata=true` — BMC, DMI,
+  NICs, GPUs (provider-admin only)
+- `GetAllSku(org)` — CPU, RAM, storage via SKU components
+- `GetAllSiteExplorerEndpoint(org)` — firmware versions from
+  Site Explorer (RMS integration)
+
+BMH includes hardware details annotation (system vendor, BIOS,
+NICs, CPU, RAM, storage). HFC includes firmware component
+versions from Site Explorer plus BMC firmware rev and GPU vbios
+from machine metadata. Degrades gracefully on 403 (tenant org).
 
 ## Design constraints
 
